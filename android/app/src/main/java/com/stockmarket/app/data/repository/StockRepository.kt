@@ -402,7 +402,7 @@ class StockRepository(
                     high = item.optDouble("high", 0.0),
                     low = item.optDouble("low", 0.0),
                     close = item.optDouble("close", 0.0),
-                    volume = item.optDouble("volume", 0.0)
+                    volume = item.optDouble("volume", 0.0).toLong()
                 )
             )
         }
