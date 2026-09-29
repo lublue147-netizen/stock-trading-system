@@ -38,38 +38,51 @@ jobs:
       - name: Grant execute permission for gradlew
         run: chmod +x android/gradlew
 
-      - name: Build Android APK
+      - name: Setup Release Keystore
+        run: |
+          keytool -genkeypair -v -keystore android/app/release.keystore \
+            -alias stockvision -keyalg RSA -keysize 2048 -validity 10000 \
+            -storepass stockvision123 -keypass stockvision123 \
+            -dname "CN=StockVision, OU=Mobile, O=StockVision, L=US, S=CA, C=US"
+
+      - name: Build Android APKs (Release & Debug)
         run: |
           cd android
-          ./gradlew assembleDebug --stacktrace
+          ./gradlew assembleRelease assembleDebug --stacktrace
 
-      - name: Locate Generated APK
-        id: apk-path
+      - name: Collect and Name Output APKs
         run: |
-          APK_FILE=$(find android/app/build/outputs/apk/debug -name "*.apk" | head -n 1)
-          echo "Found APK: $APK_FILE"
-          echo "apk_file=$APK_FILE" >> $GITHUB_OUTPUT
+          mkdir -p output_apks
+          if [ -f android/app/build/outputs/apk/release/app-release.apk ]; then
+            cp android/app/build/outputs/apk/release/app-release.apk output_apks/StockVision-Release.apk
+          fi
+          if [ -f android/app/build/outputs/apk/debug/app-debug.apk ]; then
+            cp android/app/build/outputs/apk/debug/app-debug.apk output_apks/StockVision-Debug.apk
+          fi
+          ls -lh output_apks/
 
-      - name: Upload APK as GitHub Artifact
+      - name: Upload APKs as GitHub Artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: StockVision-Debug-APK
-          path: android/app/build/outputs/apk/debug/*.apk
+          name: StockVision-APKs
+          path: output_apks/*.apk
           retention-days: 30
 
       - name: Generate Build Summary
         run: |
           echo "### 🚀 Android APK 构建成功！" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "- **应用名称**: StockVision 行情" >> $GITHUB_STEP_SUMMARY
+          echo "- **应用名称**: StockVision 股票行情" >> $GITHUB_STEP_SUMMARY
           echo "- **架构**: Jetpack Compose + Material 3 + Kotlin" >> $GITHUB_STEP_SUMMARY
-          echo "- **构建产物**: 可直接在上方 **Artifacts** 区域下载 \`StockVision-Debug-APK\` 安装包安装到手机或模拟器进行体验。" >> $GITHUB_STEP_SUMMARY
+          echo "- **包含版本**:" >> $GITHUB_STEP_SUMMARY
+          echo "  - \`StockVision-Release.apk\` (正式签名发布包，推荐生产使用)" >> $GITHUB_STEP_SUMMARY
+          echo "  - \`StockVision-Debug.apk\` (调试测试包)" >> $GITHUB_STEP_SUMMARY
 
       - name: Create GitHub Release
         if: startsWith(github.ref, 'refs/tags/v')
         uses: softprops/action-gh-release@v2
         with:
-          files: android/app/build/outputs/apk/debug/*.apk
+          files: output_apks/*.apk
           draft: false
           prerelease: false
           generate_release_notes: true
