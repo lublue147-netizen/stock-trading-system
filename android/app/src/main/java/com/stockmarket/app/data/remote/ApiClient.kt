@@ -10,7 +10,7 @@ import java.util.concurrent.TimeUnit
 
 object ApiClient {
     // Default placeholder URL (can be customized via settings to user's Cloudflare Worker)
-    const val DEFAULT_BASE_URL = "https://stock-trading-worker.workers.dev/"
+    const val DEFAULT_BASE_URL = "https://stock-trading-worker.lublue147.workers.dev/"
 
     private val moshi = Moshi.Builder()
         .add(KotlinJsonAdapterFactory())

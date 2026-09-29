@@ -2,7 +2,17 @@
 
 一款现代化的股票行情查看 Android 客户端应用与 Cloudflare Worker 边缘计算服务端。
 
-支持自选股票管理、实时行情获取、大盘指数监控、以及专业交互式历史行情 K 线图/分时走势图。**无需在本地搭建任何 Android SDK 或 Gradle 构建环境**，代码推送到 GitHub 后将由 GitHub Actions 自动云端编译并产出 APK 安装包供直接下载安装。
+### 🚀 实时在线服务与构建产物
+- **GitHub 仓库**: [lublue147-netizen/stock-trading-system](https://github.com/lublue147-netizen/stock-trading-system)
+- **Android APK 云端构建产物**: [GitHub Actions Run #36524359649](https://github.com/lublue147-netizen/stock-trading-system/actions/runs/36524359649) (可直接下载 `StockVision-Debug-APK.zip`)
+- **已部署 Cloudflare Worker**: [`https://stock-trading-worker.lublue147.workers.dev`](https://stock-trading-worker.lublue147.workers.dev)
+  - 健康检查: [`https://stock-trading-worker.lublue147.workers.dev/api/health`](https://stock-trading-worker.lublue147.workers.dev/api/health)
+  - 实时行情: [`https://stock-trading-worker.lublue147.workers.dev/api/quote?symbol=AAPL`](https://stock-trading-worker.lublue147.workers.dev/api/quote?symbol=AAPL)
+  - 历史行情: [`https://stock-trading-worker.lublue147.workers.dev/api/history?symbol=AAPL&range=1mo`](https://stock-trading-worker.lublue147.workers.dev/api/history?symbol=AAPL&range=1mo)
+  - 股票搜索: [`https://stock-trading-worker.lublue147.workers.dev/api/search?q=Tesla`](https://stock-trading-worker.lublue147.workers.dev/api/search?q=Tesla)
+  - 全球大盘: [`https://stock-trading-worker.lublue147.workers.dev/api/market/indices`](https://stock-trading-worker.lublue147.workers.dev/api/market/indices)
+
+支持自选股票管理、实时行情获取、大盘指数监控、以及专业交互式历史行情 K 线图/分时走势图。**无需在本地搭建任何 Android SDK 或 Gradle 构建环境**，代码推送到 GitHub 后已由 GitHub Actions 自动云端编译并产出 APK 安装包。
 
 ---
 
