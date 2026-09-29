@@ -58,7 +58,7 @@ fun AppNavigation(
             route = Screen.StockDetail.route,
             arguments = listOf(navArgument("symbol") { type = NavType.StringType })
         ) { backStackEntry ->
-            val symbol = backStackEntry.arguments?.getString("symbol") ?: "AAPL"
+            val symbol = backStackEntry.arguments?.getString("symbol") ?: "600519.SS"
             val viewModel = remember(symbol) { StockDetailViewModel(symbol, repository) }
             StockDetailScreen(
                 viewModel = viewModel,

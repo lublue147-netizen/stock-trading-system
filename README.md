@@ -1,23 +1,34 @@
-# StockVision 股票行情查看 App (专注 A 股与全球市场)
+# A股行情通 (A-Share Market Pro)
 
-一款现代化的股票行情查看 Android 客户端应用与 Cloudflare Worker 边缘计算服务端，**专为 A 股投资者优化**。
+一款专为 A 股投资者打造的纯血现代行情查看 Android 客户端应用与 Cloudflare Worker 边缘计算服务端。**全面聚焦 A 股市场（沪交所、深交所、北交所）**，提供东方财富级深度个股行情盘口、极速全市场股票搜索与自选股管理。
 
 ### 🚀 实时在线服务与发布下载
-- **📦 GitHub Release 正式发布**: [**Release v1.0.4 页面**](https://github.com/lublue147-netizen/stock-trading-system/releases/tag/v1.0.4)
-- **🌟 正式 Release APK 下载**: [**`StockVision-Release.apk`**](https://github.com/lublue147-netizen/stock-trading-system/releases/download/v1.0.4/StockVision-Release.apk) *(已锁定永久签名，支持直接覆盖升级安装)*
-- **🛠️ Debug APK 下载**: [**`StockVision-Debug.apk`**](https://github.com/lublue147-netizen/stock-trading-system/releases/download/v1.0.4/StockVision-Debug.apk)
+- **📦 GitHub Release 正式发布**: [**Release v1.0.5 页面**](https://github.com/lublue147-netizen/stock-trading-system/releases/tag/v1.0.5)
+- **🌟 正式 Release APK 下载**: [**`StockVision-Release.apk`**](https://github.com/lublue147-netizen/stock-trading-system/releases/download/v1.0.5/StockVision-Release.apk) *(已锁定永久签名，支持直接覆盖升级安装)*
+- **🛠️ Debug APK 下载**: [**`StockVision-Debug.apk`**](https://github.com/lublue147-netizen/stock-trading-system/releases/download/v1.0.5/StockVision-Debug.apk)
 - **GitHub 仓库**: [lublue147-netizen/stock-trading-system](https://github.com/lublue147-netizen/stock-trading-system)
 - **已部署 Cloudflare Worker**: [`https://stock-trading-worker.lublue147.workers.dev`](https://stock-trading-worker.lublue147.workers.dev)
   - 健康检查: [`/api/health`](https://stock-trading-worker.lublue147.workers.dev/api/health)
-  - 茅台行情 (含盘口全指标): [`/api/quote?symbol=600519`](https://stock-trading-worker.lublue147.workers.dev/api/quote?symbol=600519)
-  - 比亚迪行情: [`/api/quote?symbol=002594`](https://stock-trading-worker.lublue147.workers.dev/api/quote?symbol=002594)
-  - A 股大盘指数: [`/api/market/indices`](https://stock-trading-worker.lublue147.workers.dev/api/market/indices)
-  - 拼音/汉字搜索: [`/api/search?q=BYD`](https://stock-trading-worker.lublue147.workers.dev/api/search?q=BYD)
-  - 历史行情: [`/api/history?symbol=600519&range=1mo`](https://stock-trading-worker.lublue147.workers.dev/api/history?symbol=600519&range=1mo)
+  - 中京电子 (002579): [`/api/quote?symbol=002579.SZ`](https://stock-trading-worker.lublue147.workers.dev/api/quote?symbol=002579.SZ)
+  - 茅台行情 (含盘口全指标): [`/api/quote?symbol=600519.SS`](https://stock-trading-worker.lublue147.workers.dev/api/quote?symbol=600519.SS)
+  - A 股各大核心指数: [`/api/market/indices`](https://stock-trading-worker.lublue147.workers.dev/api/market/indices)
+  - 中文/拼音/代码全能搜索 (如中京电子、zjdz、002579): [`/api/search?q=中京电子`](https://stock-trading-worker.lublue147.workers.dev/api/search?q=中京电子)
+  - 历史行情: [`/api/history?symbol=002579.SZ&range=1mo`](https://stock-trading-worker.lublue147.workers.dev/api/history?symbol=002579.SZ&range=1mo)
 
-### 📊 东方财富 (East Money) 风格个股深度行情全面升级 (v1.0.4)
-1. **顶部状态栏**: 股票名称、沪/深/北/港交易所色彩角标、纯6位股票代码、实时交易状态指示器（交易中、已收盘、盘前竞价）。
-2. **巨幅价格区与涨跌停**: 超大醒目现价显示，涨跌额与百分比，精确计算展示涨停价与跌停价。
+### 🇨🇳 A 股核心深度适配与升级 (v1.0.5)
+1. **纯正中文应用命名**: 应用全面命名为 **【A股行情通】**，去除外盘杂质，沉浸式中文股票交易看盘体验。
+2. **全能 A 股股票极速搜索引擎**:
+   - 彻底修复股票无法搜索问题，接入东方财富与腾讯智能 Sug 引擎；
+   - 支持全市场任意 A 股搜索（如输入 `中京电子`、`zjdz`、`002579`、`茅台`、`宁德`、`比亚迪` 秒级精准联想匹配并呈现交易所归属）。
+3. **国内六大核心指数全覆盖**:
+   - 上证指数 (`000001.SS`)、深证成指 (`399001.SZ`)、创业板指 (`399006.SZ`)、科创50 (`000688.SS`)、沪深300 (`000300.SS`)、北证50 (`899050.BJ`)。
+4. **纯粹人民币定价体系**: 全部标的、盘口、市值与委比统一采用人民币 (`¥ / CNY`) 与手（100股）口径计量。
+5. **纯正 A 股红涨绿跌习惯**: 默认并锁定国内红涨绿跌经典配色方案，自选池与盘口全量过滤非 A 股代码。
+6. **永久固定发布签名**: 预置持久化发布密钥库，后续无论升级更新何种版本均可直接覆盖安装，绝无签名冲突报错。
+
+### 📊 东方财富 (East Money) 风格个股深度行情
+1. **顶部状态栏**: 股票名称、沪/深/北交易所色彩角标、纯6位股票代码、实时交易状态指示器（交易中、已收盘、盘前竞价）。
+2. **巨幅价格区与涨跌停**: 超大醒目现价显示，涨跌额与百分比，精确计算展示涨停价与跌停价（主板10%、双创20%、北交所30%）。
 3. **东方财富 12 宫格核心盘口**:
    - 今开、昨收、最高、最低、涨停、跌停
    - 成交量 (手 / 万手)、成交额 (亿 / 万)、换手率 %、振幅 %
@@ -34,13 +45,6 @@
    - 中间栏直观展示委比 (%) 与委差 (手)。
 7. **F10 资料与个股简况**: 所属行业分类、主营业务详细描述、概念题材板块标签流、每股收益 (EPS)、每股净资产 (BPS)、净资产收益率 (ROE)。
 8. **底部悬浮快捷操作栏**: 加自选 / 已在自选切换、一键设行情预警、即时刷新。
-
-### 🇨🇳 A 股核心深度适配
-1. **国内五大指数实时直击**: 上证指数、深证成指、创业板指、科创50、沪深300。
-2. **纯6位股票代码自动识别**: 无论输入 `600519`、`300750`、`002594` 均可自动补齐后缀并即时拉取。
-3. **拼音缩写与汉字联想搜索**: 支持输入 `BYD`、`GZMT`、`NDSD`、`DFCF` 或 `茅台`、`宁德` 模糊匹配。
-4. **纯正 A 股红涨绿跌习惯**: 默认启用红色代表上涨、绿色代表下跌的国内交易配色方案。
-5. **A 股龙头默认自选池**: 预置贵州茅台、宁德时代、比亚迪、中国平安、招商银行、东方财富、平安银行、五粮液、中芯国际等标的。
 
 ---
 

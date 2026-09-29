@@ -58,15 +58,36 @@ class StockRepository(
     }
 
     suspend fun searchStocks(query: String): Result<List<SearchResult>> = withContext(Dispatchers.IO) {
+        val cleanQ = query.trim()
+        if (cleanQ.isEmpty()) return@withContext Result.success(emptyList())
+
         try {
-            val results = getService().searchStocks(query)
-            Result.success(results)
-        } catch (e: Exception) {
-            val filtered = FALLBACK_SEARCH.filter {
-                it.symbol.contains(query, ignoreCase = true) || it.name.contains(query, ignoreCase = true)
+            val results = getService().searchStocks(cleanQ)
+            if (results.isNotEmpty()) {
+                return@withContext Result.success(results)
             }
-            Result.success(filtered)
+        } catch (e: Exception) {
+            // fallback to local resolution
         }
+
+        val filtered = FALLBACK_SEARCH.filter {
+            it.symbol.contains(cleanQ, ignoreCase = true) || it.name.contains(cleanQ, ignoreCase = true)
+        }.toMutableList()
+
+        if (cleanQ.matches(Regex("^[0-9]{6}$"))) {
+            val suffix = if (cleanQ.startsWith("6")) ".SS" else if (cleanQ.startsWith("8") || cleanQ.startsWith("4")) ".BJ" else ".SZ"
+            val ex = if (cleanQ.startsWith("6")) "上交所" else if (cleanQ.startsWith("8") || cleanQ.startsWith("4")) "北交所" else "深交所"
+            val sym = "$cleanQ$suffix"
+            if (filtered.none { it.symbol == sym }) {
+                filtered.add(0, SearchResult(sym, getStockName(sym), ex, "A股"))
+            }
+        } else if (cleanQ.equals("zjdz", ignoreCase = true) || cleanQ.contains("中京")) {
+            if (filtered.none { it.symbol == "002579.SZ" }) {
+                filtered.add(0, SearchResult("002579.SZ", "中京电子", "深交所", "A股"))
+            }
+        }
+
+        Result.success(filtered)
     }
 
     suspend fun getMarketIndices(): Result<List<MarketIndex>> = withContext(Dispatchers.IO) {
@@ -150,36 +171,24 @@ class StockRepository(
                 "浓香型白酒典型代表，高端名酒核心企业。",
                 listOf("浓香龙头", "深股通", "消费升级", "MSCI中国", "高分红")
             )
+            "002579.SZ", "002579" -> Tuple9(
+                17.90, 26.2, 3.50, 0.72, 4.47, 15.6,
+                "电子元器件 / 印制电路板(PCB)",
+                "专注于高密度印制电路板(PCB)与柔性印制电路板(FPC)研发生产，广泛应用于汽车电子、光模块与智能终端。",
+                listOf("中京电子", "PCB概念", "汽车电子", "消费电子", "深股通", "折叠屏")
+            )
             "688981.SS", "688981" -> Tuple9(
                 95.20, 85.0, 3.80, 1.12, 25.05, 4.48,
                 "半导体 / 芯片制造",
                 "中国内地技术最先进、配套最完善、规模最大的集成电路制造企业。",
                 listOf("芯片制造", "科创50", "半导体代工", "国产替代", "硬科技")
             )
-            "0700.HK" -> Tuple9(
-                432.80, 24.3, 3.95, 17.80, 109.50, 16.2,
-                "互联网与信息技术",
-                "社交网络(微信/QQ)、数字娱乐、金融科技及企业云服务。",
-                listOf("港股通", "社交龙头", "手游电竞", "云计算", "腾讯概念")
-            )
-            "AAPL" -> Tuple9(
-                231.41, 34.2, 48.5, 6.76, 4.77, 141.8,
-                "消费电子",
-                "iPhone、Mac、iPad及可穿戴设备软硬件生态。",
-                listOf("美股龙头", "消费电子", "AI手机", "纳斯达克100")
-            )
-            "TSLA" -> Tuple9(
-                260.48, 72.5, 12.8, 3.59, 20.35, 17.6,
-                "新能源汽车 / 自动驾驶",
-                "电动汽车、储能产品(Powerwall)与全自动驾驶(FSD)技术研发。",
-                listOf("特斯拉概念", "机器人Optimus", "自动驾驶", "储能")
-            )
             else -> {
                 val seed = clean.hashCode().let { if (it < 0) -it else it }
-                val p = 20.0 + (seed % 180)
+                val p = 15.0 + (seed % 120)
                 Tuple9(
                     p, 25.0, 2.5, p / 20.0, p / 3.0, 10.0,
-                    if (isAShare) "A股制造业" else "科技创新",
+                    "A股精选制造",
                     "致力于优质产品研发、智能化生产与海内外市场拓展。",
                     listOf("A股精选", "核心资产", "稳健增长")
                 )
@@ -188,17 +197,12 @@ class StockRepository(
 
         val change = round(basePrice * 0.015 * 100) / 100
         val changePercent = round((change / basePrice) * 10000) / 100
-        val currency = when {
-            clean.endsWith(".HK") -> "HKD"
-            clean.endsWith(".SS") || clean.endsWith(".SZ") || clean.endsWith(".BJ") -> "CNY"
-            else -> if (isAShare) "CNY" else "USD"
-        }
+        val currency = "CNY"
         val exchange = when {
-            clean.endsWith(".HK") -> "HKSE"
             clean.endsWith(".SS") || clean.startsWith("6") -> "SSE"
             clean.endsWith(".SZ") || clean.startsWith("0") || clean.startsWith("3") -> "SZSE"
             clean.endsWith(".BJ") || clean.startsWith("8") || clean.startsWith("4") -> "BSE"
-            else -> "NASDAQ"
+            else -> "SZSE"
         }
 
         val limitRatio = if (isChiNextOrStar) 0.20 else 0.10
@@ -302,14 +306,10 @@ class StockRepository(
     }
 
     private fun getStockName(symbol: String): String = when (symbol) {
-        "AAPL" -> "Apple Inc."
-        "TSLA" -> "Tesla, Inc."
-        "NVDA" -> "NVIDIA Corporation"
-        "MSFT" -> "Microsoft Corporation"
-        "0700.HK" -> "腾讯控股 (Tencent)"
         "600519.SS" -> "贵州茅台"
         "300750.SZ" -> "宁德时代"
         "002594.SZ" -> "比亚迪"
+        "002579.SZ" -> "中京电子"
         "601318.SS" -> "中国平安"
         "600036.SS" -> "招商银行"
         "300059.SZ" -> "东方财富"
@@ -321,11 +321,7 @@ class StockRepository(
         "399006.SZ" -> "创业板指"
         "000688.SS" -> "科创50"
         "000300.SS" -> "沪深300"
-        "0700.HK" -> "腾讯控股"
-        "9988.HK" -> "阿里巴巴"
-        "AAPL" -> "苹果公司"
-        "TSLA" -> "特斯拉"
-        "NVDA" -> "英伟达"
+        "899050.BJ" -> "北证50"
         else -> "$symbol"
     }
 
@@ -336,11 +332,12 @@ class StockRepository(
             MarketIndex("399006.SZ", "创业板指", 3152.28, 12.46, 0.40),
             MarketIndex("000688.SS", "科创50", 1575.43, 19.45, 1.25),
             MarketIndex("000300.SS", "沪深300", 4357.12, 16.36, 0.38),
-            MarketIndex("^HSI", "恒生指数", 20590.15, 312.45, 1.54)
+            MarketIndex("899050.BJ", "北证50", 1432.18, 28.52, 2.03)
         )
 
         val FALLBACK_SEARCH = listOf(
             SearchResult("600519.SS", "贵州茅台", "上交所", "A股"),
+            SearchResult("002579.SZ", "中京电子", "深交所", "A股"),
             SearchResult("300750.SZ", "宁德时代", "深交所", "A股"),
             SearchResult("002594.SZ", "比亚迪", "深交所", "A股"),
             SearchResult("300059.SZ", "东方财富", "深交所", "A股"),
@@ -352,9 +349,9 @@ class StockRepository(
             SearchResult("000001.SS", "上证指数", "上交所", "指数"),
             SearchResult("399001.SZ", "深证成指", "深交所", "指数"),
             SearchResult("399006.SZ", "创业板指", "深交所", "指数"),
-            SearchResult("0700.HK", "腾讯控股", "港交所", "港股"),
-            SearchResult("AAPL", "苹果公司 (Apple)", "NASDAQ", "美股"),
-            SearchResult("TSLA", "特斯拉 (Tesla)", "NASDAQ", "美股")
+            SearchResult("000688.SS", "科创50", "上交所", "指数"),
+            SearchResult("000300.SS", "沪深300", "上交所", "指数"),
+            SearchResult("899050.BJ", "北证50", "北交所", "指数")
         )
     }
 }

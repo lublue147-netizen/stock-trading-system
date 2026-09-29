@@ -32,15 +32,15 @@ export default {
 
     if (path === '/' || path === '') {
       return jsonResponse({
-        service: 'Stock Trading & Quotation API',
+        service: 'A股行情通 API',
         status: 'online',
-        version: '1.0.0',
+        version: '1.0.5',
         endpoints: {
           health: '/api/health',
-          quote: '/api/quote?symbol=AAPL',
-          quotes: '/api/quotes?symbols=AAPL,TSLA,NVDA',
-          history: '/api/history?symbol=AAPL&range=1mo&interval=1d',
-          search: '/api/search?q=Apple',
+          quote: '/api/quote?symbol=600519.SS',
+          quotes: '/api/quotes?symbols=600519.SS,002579.SZ,300750.SZ',
+          history: '/api/history?symbol=600519.SS&range=1mo&interval=1d',
+          search: '/api/search?q=中京电子',
           marketIndices: '/api/market/indices',
         },
         supportedRanges: ['1d', '5d', '1mo', '6mo', '1y', 'all'],

@@ -1,124 +1,49 @@
 import { StockQuote, HistoricalData, MarketIndex, SearchResult, CandlePoint } from '../types';
 
 export const MOCK_INDICES: MarketIndex[] = [
-  { symbol: "^GSPC", name: "S&P 500", price: 5864.67, change: 24.34, changePercent: 0.42 },
-  { symbol: "^IXIC", name: "NASDAQ", price: 18415.21, change: 115.80, changePercent: 0.63 },
-  { symbol: "^DJI", name: "Dow Jones", price: 42863.86, change: -45.12, changePercent: -0.11 },
   { symbol: "000001.SS", name: "上证指数", price: 3326.46, change: 38.20, changePercent: 1.16 },
   { symbol: "399001.SZ", name: "深证成指", price: 10611.72, change: 184.60, changePercent: 1.77 },
-  { symbol: "^HSI", name: "恒生指数", price: 20638.70, change: 254.30, changePercent: 1.25 }
+  { symbol: "399006.SZ", name: "创业板指", price: 2215.80, change: 48.50, changePercent: 2.24 },
+  { symbol: "000688.SS", name: "科创50", price: 985.40, change: 21.60, changePercent: 2.24 },
+  { symbol: "000300.SS", name: "沪深300", price: 3950.25, change: 45.10, changePercent: 1.15 },
+  { symbol: "899050.BJ", name: "北证50", price: 1432.18, change: 28.52, changePercent: 2.03 }
 ];
 
 export const MOCK_STOCKS: Record<string, { quote: StockQuote; basePrice: number }> = {
-  "AAPL": {
+  "002579.SZ": {
     quote: {
-      symbol: "AAPL",
-      name: "Apple Inc.",
-      price: 231.41,
-      change: 1.85,
-      changePercent: 0.81,
-      currency: "USD",
-      exchange: "NASDAQ",
-      open: 230.10,
-      high: 232.50,
-      low: 229.80,
-      previousClose: 229.56,
-      volume: 48512300,
-      marketCap: 3520000000000,
-      peRatio: 34.2,
-      fiftyTwoWeekHigh: 237.23,
-      fiftyTwoWeekLow: 164.08,
-      timestamp: Date.now()
+      symbol: "002579.SZ",
+      name: "中京电子",
+      price: 17.90,
+      change: 0.60,
+      changePercent: 3.47,
+      currency: "CNY",
+      exchange: "SZSE",
+      open: 17.90,
+      high: 18.30,
+      low: 16.68,
+      previousClose: 17.30,
+      volume: 102635300,
+      marketCap: 10960000000,
+      floatMarketCap: 10440000000,
+      peRatio: 26.2,
+      pbRatio: 3.5,
+      fiftyTwoWeekHigh: 23.40,
+      fiftyTwoWeekLow: 9.98,
+      timestamp: Date.now(),
+      turnoverRate: 3.0,
+      turnoverAmount: 1823380000,
+      amplitude: 9.36,
+      limitUpPrice: 19.03,
+      limitDownPrice: 15.57,
+      eps: 0.72,
+      bps: 4.47,
+      roe: 15.6,
+      industry: "电子元器件 / 印制电路板(PCB)",
+      mainBusiness: "专注于高密度印制电路板(PCB)与柔性印制电路板(FPC)研发生产，广泛应用于汽车电子、AI光模块与智能终端。",
+      conceptTags: ["中京电子", "PCB概念", "汽车电子", "消费电子", "深股通", "折叠屏"]
     },
-    basePrice: 230.0
-  },
-  "TSLA": {
-    quote: {
-      symbol: "TSLA",
-      name: "Tesla, Inc.",
-      price: 260.48,
-      change: 8.75,
-      changePercent: 3.48,
-      currency: "USD",
-      exchange: "NASDAQ",
-      open: 253.20,
-      high: 262.00,
-      low: 251.50,
-      previousClose: 251.73,
-      volume: 82451000,
-      marketCap: 830000000000,
-      peRatio: 72.5,
-      fiftyTwoWeekHigh: 271.00,
-      fiftyTwoWeekLow: 138.80,
-      timestamp: Date.now()
-    },
-    basePrice: 255.0
-  },
-  "NVDA": {
-    quote: {
-      symbol: "NVDA",
-      name: "NVIDIA Corporation",
-      price: 138.25,
-      change: 3.12,
-      changePercent: 2.31,
-      currency: "USD",
-      exchange: "NASDAQ",
-      open: 135.50,
-      high: 139.10,
-      low: 135.00,
-      previousClose: 135.13,
-      volume: 120530000,
-      marketCap: 3380000000000,
-      peRatio: 64.8,
-      fiftyTwoWeekHigh: 140.76,
-      fiftyTwoWeekLow: 39.23,
-      timestamp: Date.now()
-    },
-    basePrice: 135.0
-  },
-  "MSFT": {
-    quote: {
-      symbol: "MSFT",
-      name: "Microsoft Corporation",
-      price: 428.15,
-      change: -1.25,
-      changePercent: -0.29,
-      currency: "USD",
-      exchange: "NASDAQ",
-      open: 429.80,
-      high: 431.20,
-      low: 426.50,
-      previousClose: 429.40,
-      volume: 21450000,
-      marketCap: 3180000000000,
-      peRatio: 36.1,
-      fiftyTwoWeekHigh: 468.35,
-      fiftyTwoWeekLow: 309.45,
-      timestamp: Date.now()
-    },
-    basePrice: 428.0
-  },
-  "0700.HK": {
-    quote: {
-      symbol: "0700.HK",
-      name: "腾讯控股 (Tencent Holdings)",
-      price: 432.80,
-      change: 7.20,
-      changePercent: 1.69,
-      currency: "HKD",
-      exchange: "HKSE",
-      open: 427.00,
-      high: 435.60,
-      low: 426.20,
-      previousClose: 425.60,
-      volume: 18450000,
-      marketCap: 4050000000000,
-      peRatio: 24.3,
-      fiftyTwoWeekHigh: 482.00,
-      fiftyTwoWeekLow: 260.20,
-      timestamp: Date.now()
-    },
-    basePrice: 430.0
+    basePrice: 17.5
   },
   "600519.SS": {
     quote: {
@@ -333,19 +258,21 @@ export function generateMockCandles(symbol: string, range: string, basePrice: nu
 }
 
 export const SEARCH_DICTIONARY: SearchResult[] = [
-  { symbol: "AAPL", name: "Apple Inc.", exchange: "NASDAQ", type: "EQUITY" },
-  { symbol: "TSLA", name: "Tesla, Inc.", exchange: "NASDAQ", type: "EQUITY" },
-  { symbol: "NVDA", name: "NVIDIA Corporation", exchange: "NASDAQ", type: "EQUITY" },
-  { symbol: "MSFT", name: "Microsoft Corporation", exchange: "NASDAQ", type: "EQUITY" },
-  { symbol: "AMZN", name: "Amazon.com, Inc.", exchange: "NASDAQ", type: "EQUITY" },
-  { symbol: "GOOGL", name: "Alphabet Inc. (Google)", exchange: "NASDAQ", type: "EQUITY" },
-  { symbol: "META", name: "Meta Platforms, Inc.", exchange: "NASDAQ", type: "EQUITY" },
-  { symbol: "0700.HK", name: "腾讯控股 (Tencent Holdings)", exchange: "HKSE", type: "EQUITY" },
-  { symbol: "9988.HK", name: "阿里巴巴 (Alibaba Group)", exchange: "HKSE", type: "EQUITY" },
-  { symbol: "3690.HK", name: "美团 (Meituan)", exchange: "HKSE", type: "EQUITY" },
-  { symbol: "600519.SS", name: "贵州茅台 (Kweichow Moutai)", exchange: "SSE", type: "EQUITY" },
-  { symbol: "000858.SZ", name: "五粮液 (Wuliangye)", exchange: "SZSE", type: "EQUITY" },
-  { symbol: "300750.SZ", name: "宁德时代 (CATL)", exchange: "SZSE", type: "EQUITY" },
-  { symbol: "002594.SZ", name: "比亚迪 (BYD Company)", exchange: "SZSE", type: "EQUITY" },
-  { symbol: "BABA", name: "Alibaba Group ADR", exchange: "NYSE", type: "EQUITY" }
+  { symbol: "002579.SZ", name: "中京电子", exchange: "深交所", type: "A股" },
+  { symbol: "600519.SS", name: "贵州茅台", exchange: "上交所", type: "A股" },
+  { symbol: "300750.SZ", name: "宁德时代", exchange: "深交所", type: "A股" },
+  { symbol: "002594.SZ", name: "比亚迪", exchange: "深交所", type: "A股" },
+  { symbol: "300059.SZ", name: "东方财富", exchange: "深交所", type: "A股" },
+  { symbol: "688981.SS", name: "中芯国际", exchange: "上交所", type: "科创板" },
+  { symbol: "601318.SS", name: "中国平安", exchange: "上交所", type: "A股" },
+  { symbol: "600036.SS", name: "招商银行", exchange: "上交所", type: "A股" },
+  { symbol: "000858.SZ", name: "五粮液", exchange: "深交所", type: "A股" },
+  { symbol: "000001.SZ", name: "平安银行", exchange: "深交所", type: "A股" },
+  { symbol: "000001.SS", name: "上证指数", exchange: "上交所", type: "指数" },
+  { symbol: "399001.SZ", name: "深证成指", exchange: "深交所", type: "指数" },
+  { symbol: "399006.SZ", name: "创业板指", exchange: "深交所", type: "指数" },
+  { symbol: "000688.SS", name: "科创50", exchange: "上交所", type: "指数" },
+  { symbol: "000300.SS", name: "沪深300", exchange: "上交所", type: "指数" },
+  { symbol: "899050.BJ", name: "北证50", exchange: "北交所", type: "指数" },
+  { symbol: "301121.SZ", name: "紫建电子", exchange: "深交所", type: "A股" }
 ];

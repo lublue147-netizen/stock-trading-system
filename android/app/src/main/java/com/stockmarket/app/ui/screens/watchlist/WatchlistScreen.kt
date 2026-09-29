@@ -39,14 +39,13 @@ fun WatchlistScreen(
                 title = {
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Text(
-                            text = "StockVision",
+                            text = "A股",
                             color = TextPrimary,
                             fontWeight = FontWeight.Bold,
                             fontSize = 20.sp
                         )
-                        Spacer(modifier = Modifier.width(6.dp))
                         Text(
-                            text = "行情",
+                            text = "行情通",
                             color = PrimaryBlue,
                             fontWeight = FontWeight.Bold,
                             fontSize = 20.sp

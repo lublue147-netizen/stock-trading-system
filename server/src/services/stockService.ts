@@ -3,8 +3,57 @@ import { MOCK_STOCKS, MOCK_INDICES, SEARCH_DICTIONARY, generateMockCandles } fro
 
 const USER_AGENT = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36';
 
+const CHINESE_NAME_CACHE = new Map<string, string>();
+
+export async function resolveChineseName(symbol: string): Promise<string | null> {
+  const cleanSymbol = symbol.trim().toUpperCase();
+  if (MOCK_STOCKS[cleanSymbol]?.quote?.name) {
+    return MOCK_STOCKS[cleanSymbol].quote.name;
+  }
+  if (CHINESE_NAME_CACHE.has(cleanSymbol)) {
+    return CHINESE_NAME_CACHE.get(cleanSymbol)!;
+  }
+
+  const code = cleanSymbol.replace(/\.(SS|SZ|BJ)$/i, '');
+  if (/^\d{6}$/.test(code)) {
+    try {
+      const url = `https://searchapi.eastmoney.com/api/suggest/get?input=${encodeURIComponent(code)}&type=14`;
+      const res = await fetch(url, { headers: { 'User-Agent': USER_AGENT } });
+      if (res.ok) {
+        const data = (await res.json()) as any;
+        const list = data?.QuotationCodeTable?.Data || [];
+        const match = list.find((it: any) => it.Code === code);
+        if (match?.Name) {
+          CHINESE_NAME_CACHE.set(cleanSymbol, match.Name);
+          return match.Name;
+        }
+      }
+    } catch {
+      // Ignore network errors in name resolution
+    }
+
+    const dictMatch = SEARCH_DICTIONARY.find(it => it.symbol.startsWith(code));
+    if (dictMatch) {
+      CHINESE_NAME_CACHE.set(cleanSymbol, dictMatch.name);
+      return dictMatch.name;
+    }
+  }
+
+  return null;
+}
+
+function getAShareExchange(symbol: string): string {
+  if (symbol.endsWith('.SS')) return '上交所';
+  if (symbol.endsWith('.SZ')) return '深交所';
+  if (symbol.endsWith('.BJ')) return '北交所';
+  return 'A股';
+}
+
 export async function fetchStockQuote(symbol: string): Promise<StockQuote> {
   const cleanSymbol = symbol.trim().toUpperCase();
+  const chineseName = await resolveChineseName(cleanSymbol);
+  const exchangeName = getAShareExchange(cleanSymbol);
+
   try {
     const url = `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(cleanSymbol)}?range=1d&interval=1m`;
     const res = await fetch(url, {
@@ -38,12 +87,12 @@ export async function fetchStockQuote(symbol: string): Promise<StockQuote> {
 
         return {
           symbol: cleanSymbol,
-          name: meta.longName || meta.shortName || cleanSymbol,
+          name: chineseName || meta.longName || meta.shortName || cleanSymbol,
           price: currentPrice,
           change,
           changePercent,
-          currency: meta.currency || 'CNY',
-          exchange: meta.exchangeName || 'Unknown',
+          currency: 'CNY',
+          exchange: exchangeName,
           open,
           high,
           low,
@@ -75,25 +124,27 @@ export async function fetchStockQuote(symbol: string): Promise<StockQuote> {
   if (MOCK_STOCKS[cleanSymbol]) {
     return {
       ...MOCK_STOCKS[cleanSymbol].quote,
+      name: chineseName || MOCK_STOCKS[cleanSymbol].quote.name,
+      exchange: exchangeName,
       timestamp: Date.now()
     };
   }
 
-  // Synthetic fallback
-  const base = 100 + (cleanSymbol.charCodeAt(0) * 2);
+  // Synthetic fallback for A-shares
+  const base = 15 + ((cleanSymbol.charCodeAt(0) * 3) % 85);
   return {
     symbol: cleanSymbol,
-    name: `${cleanSymbol} Equity`,
+    name: chineseName || `${cleanSymbol}`,
     price: base,
-    change: 1.25,
+    change: 0.25,
     changePercent: 1.25,
-    currency: "USD",
-    exchange: "NYSE",
-    open: base - 0.5,
-    high: base + 2.0,
-    low: base - 1.0,
-    previousClose: base - 1.25,
-    volume: 1500000,
+    currency: "CNY",
+    exchange: exchangeName,
+    open: Math.round((base - 0.15) * 100) / 100,
+    high: Math.round((base + 0.45) * 100) / 100,
+    low: Math.round((base - 0.25) * 100) / 100,
+    previousClose: Math.round((base - 0.25) * 100) / 100,
+    volume: 5800000,
     timestamp: Date.now()
   };
 }
@@ -166,7 +217,7 @@ export async function fetchHistoricalData(symbol: string, range = '1mo', interva
             interval: chosenInterval,
             candles,
             meta: {
-              currency: result.meta?.currency || 'USD',
+              currency: result.meta?.currency || 'CNY',
               previousClose: result.meta?.chartPreviousClose || candles[0].open,
               high,
               low
@@ -180,7 +231,7 @@ export async function fetchHistoricalData(symbol: string, range = '1mo', interva
   }
 
   // Fallback to generated candles
-  const basePrice = MOCK_STOCKS[cleanSymbol]?.basePrice || 120.0;
+  const basePrice = MOCK_STOCKS[cleanSymbol]?.basePrice || 18.0;
   const candles = generateMockCandles(cleanSymbol, range, basePrice);
   const high = Math.max(...candles.map(c => c.high));
   const low = Math.min(...candles.map(c => c.low));
@@ -191,7 +242,7 @@ export async function fetchHistoricalData(symbol: string, range = '1mo', interva
     interval: chosenInterval,
     candles,
     meta: {
-      currency: MOCK_STOCKS[cleanSymbol]?.quote?.currency || 'USD',
+      currency: MOCK_STOCKS[cleanSymbol]?.quote?.currency || 'CNY',
       previousClose: candles[0]?.open || basePrice,
       high,
       low
@@ -203,40 +254,105 @@ export async function searchStocks(query: string): Promise<SearchResult[]> {
   const cleanQ = query.trim();
   if (!cleanQ) return [];
 
-  try {
-    const url = `https://query2.finance.yahoo.com/v1/finance/search?q=${encodeURIComponent(cleanQ)}&quotesCount=10&newsCount=0`;
-    const res = await fetch(url, {
-      headers: {
-        'User-Agent': USER_AGENT,
-        'Accept': 'application/json'
-      }
-    });
+  const results: SearchResult[] = [];
+  const seen = new Set<string>();
 
+  const addResult = (symbol: string, name: string, ex: string) => {
+    if (!seen.has(symbol)) {
+      seen.add(symbol);
+      CHINESE_NAME_CACHE.set(symbol, name);
+      results.push({
+        symbol,
+        name,
+        exchange: ex,
+        type: 'EQUITY'
+      });
+    }
+  };
+
+  // 1. EastMoney suggest API (Best for Chinese stock names, pinyin, 6-digit codes)
+  try {
+    const url = `https://searchapi.eastmoney.com/api/suggest/get?input=${encodeURIComponent(cleanQ)}&type=14`;
+    const res = await fetch(url, { headers: { 'User-Agent': USER_AGENT } });
     if (res.ok) {
       const data = (await res.json()) as any;
-      const quotes = data?.quotes || [];
-      const results: SearchResult[] = quotes
-        .filter((q: any) => q.symbol && (q.quoteType === 'EQUITY' || q.quoteType === 'ETF' || q.quoteType === 'INDEX'))
-        .map((q: any) => ({
-          symbol: q.symbol,
-          name: q.shortname || q.longname || q.symbol,
-          exchange: q.exchDisp || q.exchange || '',
-          type: q.quoteType || 'EQUITY'
-        }));
+      const list = data?.QuotationCodeTable?.Data || [];
+      for (const item of list) {
+        const code = item.Code;
+        if (!code || !/^\d{6}$/.test(code)) continue;
+        const name = item.Name || code;
+        let ex = '深交所';
+        let symbol = `${code}.SZ`;
 
-      if (results.length > 0) {
-        return results;
+        if (item.MarketType === '1' || code.startsWith('60') || code.startsWith('68')) {
+          ex = '上交所';
+          symbol = `${code}.SS`;
+        } else if (item.MarketType === '3' || code.startsWith('8') || code.startsWith('4')) {
+          ex = '北交所';
+          symbol = `${code}.BJ`;
+        } else {
+          ex = '深交所';
+          symbol = `${code}.SZ`;
+        }
+        addResult(symbol, name, ex);
       }
     }
   } catch (err) {
-    console.warn(`Search error for ${cleanQ}:`, err);
+    console.warn(`Eastmoney suggest error for ${cleanQ}:`, err);
   }
 
-  // Fallback search dictionary filter
-  const qLower = cleanQ.toLowerCase();
-  return SEARCH_DICTIONARY.filter(item =>
-    item.symbol.toLowerCase().includes(qLower) || item.name.toLowerCase().includes(qLower)
-  );
+  // 2. Tencent Smartbox API (Excellent for fuzzy search and pinyin)
+  try {
+    const url = `https://smartbox.gtimg.cn/s3/?q=${encodeURIComponent(cleanQ)}&t=all`;
+    const res = await fetch(url, { headers: { 'User-Agent': USER_AGENT } });
+    if (res.ok) {
+      const text = await res.text();
+      const match = text.match(/v_hint="([^"]*)"/);
+      if (match && match[1]) {
+        const items = match[1].split('^');
+        for (const it of items) {
+          const parts = it.split('~');
+          if (parts.length >= 3) {
+            const market = parts[0].toLowerCase(); // sh, sz, bj
+            const code = parts[1];
+            let name = parts[2];
+            try {
+              name = JSON.parse(`"${name}"`);
+            } catch {
+              // keep as-is
+            }
+            if (['sh', 'sz', 'bj'].includes(market) && /^\d{6}$/.test(code)) {
+              const suffix = market === 'sh' ? 'SS' : (market === 'bj' ? 'BJ' : 'SZ');
+              const symbol = `${code}.${suffix}`;
+              const ex = suffix === 'SS' ? '上交所' : (suffix === 'BJ' ? '北交所' : '深交所');
+              addResult(symbol, name, ex);
+            }
+          }
+        }
+      }
+    }
+  } catch (err) {
+    console.warn(`Tencent smartbox error for ${cleanQ}:`, err);
+  }
+
+  // 3. Fallback dictionary filter
+  if (results.length === 0) {
+    const qLower = cleanQ.toLowerCase();
+    for (const item of SEARCH_DICTIONARY) {
+      if (item.symbol.toLowerCase().includes(qLower) || item.name.toLowerCase().includes(qLower)) {
+        addResult(item.symbol, item.name, item.exchange);
+      }
+    }
+  }
+
+  // 4. If query is a 6-digit number and still not matched, synthesize A-share result
+  if (results.length === 0 && /^\d{6}$/.test(cleanQ)) {
+    const exSuffix = (cleanQ.startsWith('60') || cleanQ.startsWith('68')) ? 'SS' : (cleanQ.startsWith('8') || cleanQ.startsWith('4') ? 'BJ' : 'SZ');
+    const exName = exSuffix === 'SS' ? '上交所' : (exSuffix === 'BJ' ? '北交所' : '深交所');
+    addResult(`${cleanQ}.${exSuffix}`, `A股 ${cleanQ}`, exName);
+  }
+
+  return results;
 }
 
 export async function fetchMarketIndices(): Promise<MarketIndex[]> {

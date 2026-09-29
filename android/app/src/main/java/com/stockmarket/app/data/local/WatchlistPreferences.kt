@@ -20,21 +20,29 @@ class WatchlistPreferences(context: Context) {
             "600519.SS", // 贵州茅台
             "300750.SZ", // 宁德时代
             "002594.SZ", // 比亚迪
+            "002579.SZ", // 中京电子
+            "300059.SZ", // 东方财富
             "601318.SS", // 中国平安
             "600036.SS", // 招商银行
-            "300059.SZ", // 东方财富
             "000001.SZ", // 平安银行
             "000858.SZ", // 五粮液
-            "688981.SS", // 中芯国际
-            "0700.HK"    // 腾讯控股
+            "688981.SS"  // 中芯国际
         )
+
+        private fun isAShare(symbol: String): Boolean {
+            val s = symbol.trim().uppercase()
+            return s.endsWith(".SS") || s.endsWith(".SZ") || s.endsWith(".BJ") ||
+                    s.matches(Regex("^[0-9]{6}(\\.[A-Za-z]+)?$"))
+        }
     }
 
     private val _watchlistFlow = MutableStateFlow(getWatchlistSymbols())
     val watchlistFlow: StateFlow<Set<String>> = _watchlistFlow.asStateFlow()
 
     fun getWatchlistSymbols(): Set<String> {
-        return prefs.getStringSet(KEY_WATCHLIST, DEFAULT_SYMBOLS) ?: DEFAULT_SYMBOLS
+        val raw = prefs.getStringSet(KEY_WATCHLIST, null) ?: DEFAULT_SYMBOLS
+        val aSharesOnly = raw.filter { isAShare(it) }.toSet()
+        return if (aSharesOnly.isNotEmpty()) aSharesOnly else DEFAULT_SYMBOLS
     }
 
     fun addSymbol(symbol: String): Boolean {

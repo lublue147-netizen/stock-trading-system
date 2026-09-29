@@ -43,7 +43,7 @@ fun SearchScreen(
                     TextField(
                         value = state.query,
                         onValueChange = { viewModel.onQueryChange(it) },
-                        placeholder = { Text("输入代码/拼音/名称 (如 600519, BYD, 茅台)", fontSize = 14.sp, color = TextMuted) },
+                        placeholder = { Text("输入A股代码/拼音/名称 (如 002579, zjdz, 中京电子)", fontSize = 14.sp, color = TextMuted) },
                         singleLine = true,
                         colors = TextFieldDefaults.colors(
                             focusedContainerColor = Color.Transparent,
