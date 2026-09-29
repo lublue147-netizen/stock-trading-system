@@ -26,3 +26,13 @@ val MA5Color = Color(0xFFF59E0B) // Amber
 val MA10Color = Color(0xFF8B5CF6) // Purple
 val MA20Color = Color(0xFF06B6D4) // Cyan
 val VolumeColor = Color(0xFF64748B)
+
+// East Money (东方财富) Signature Colors
+val EastMoneyRed = Color(0xFFE53935)
+val EastMoneyOrange = Color(0xFFFF9800)
+val EastMoneyYellow = Color(0xFFFBBF24)
+val VwapYellow = Color(0xFFFFCC00)
+val EastMoneySurface = Color(0xFF141926)
+val EastMoneyCard = Color(0xFF1C2233)
+val EastMoneyBorder = Color(0xFF283147)
+

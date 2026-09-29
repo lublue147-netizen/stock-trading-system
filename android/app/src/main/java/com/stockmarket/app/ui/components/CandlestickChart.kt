@@ -64,14 +64,17 @@ fun CandlestickChart(
 
     val vol5 = remember(candles) { calculateVolMA(candles, 5) }
     val vol10 = remember(candles) { calculateVolMA(candles, 10) }
+    val vwap = remember(candles) { calculateVWAP(candles) }
 
-    val activeCandle = selectedIndex?.let { candles.getOrNull(it) } ?: candles.lastOrNull()
-    val activeMA5 = selectedIndex?.let { ma5.getOrNull(it) } ?: ma5.lastOrNull()
-    val activeMA10 = selectedIndex?.let { ma10.getOrNull(it) } ?: ma10.lastOrNull()
-    val activeMA20 = selectedIndex?.let { ma20.getOrNull(it) } ?: ma20.lastOrNull()
+    val activeIndex = selectedIndex ?: (candles.size - 1).coerceAtLeast(0)
+    val activeCandle = candles.getOrNull(activeIndex)
+    val activeMA5 = ma5.getOrNull(activeIndex)
+    val activeMA10 = ma10.getOrNull(activeIndex)
+    val activeMA20 = ma20.getOrNull(activeIndex)
+    val activeVWAP = vwap.getOrNull(activeIndex)
 
-    val activeVol5 = selectedIndex?.let { vol5.getOrNull(it) } ?: vol5.lastOrNull()
-    val activeVol10 = selectedIndex?.let { vol10.getOrNull(it) } ?: vol10.lastOrNull()
+    val activeVol5 = vol5.getOrNull(activeIndex)
+    val activeVol10 = vol10.getOrNull(activeIndex)
 
     val baseClose = previousClose ?: candles.firstOrNull()?.open ?: 100.0
 
@@ -82,14 +85,15 @@ fun CandlestickChart(
             .background(SurfaceDark)
             .padding(10.dp)
     ) {
-        // Top Info & Indicator Legend
+        // Top Info & Indicator Legend (East Money Style)
         Column(modifier = Modifier.fillMaxWidth()) {
             if (activeCandle != null) {
                 val dateFormat = remember { SimpleDateFormat("yyyy/MM/dd HH:mm", Locale.getDefault()) }
                 val dateStr = dateFormat.format(Date(activeCandle.timestamp))
-                val candleDelta = activeCandle.close - (activeCandle.open)
-                val candleDeltaPercent = if (activeCandle.open > 0) (candleDelta / activeCandle.open) * 100 else 0.0
-                val isUp = activeCandle.close >= activeCandle.open
+                val prevRef = if (chartType == ChartType.LINE && previousClose != null && previousClose > 0) previousClose else activeCandle.open
+                val candleDelta = activeCandle.close - prevRef
+                val candleDeltaPercent = if (prevRef > 0) (candleDelta / prevRef) * 100 else 0.0
+                val isUp = candleDelta >= 0
                 val candleColor = if (isUp) stockColors.upColor else stockColors.downColor
                 val prefix = if (isUp) "+" else ""
 
@@ -105,7 +109,7 @@ fun CandlestickChart(
                     )
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Text(
-                            text = "收: ${String.format(Locale.US, "%.2f", activeCandle.close)}",
+                            text = "现价: ${String.format(Locale.US, "%.2f", activeCandle.close)}",
                             color = candleColor,
                             fontSize = 12.sp,
                             fontWeight = FontWeight.Bold
@@ -122,26 +126,45 @@ fun CandlestickChart(
 
                 Spacer(modifier = Modifier.height(3.dp))
 
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween
-                ) {
-                    Text("开: ${String.format(Locale.US, "%.2f", activeCandle.open)}", color = TextMuted, fontSize = 10.sp)
-                    Text("高: ${String.format(Locale.US, "%.2f", activeCandle.high)}", color = TextMuted, fontSize = 10.sp)
-                    Text("低: ${String.format(Locale.US, "%.2f", activeCandle.low)}", color = TextMuted, fontSize = 10.sp)
-                    Text("量: ${formatVolumeInLots(activeCandle.volume)}", color = TextMuted, fontSize = 10.sp)
-                }
-            }
+                if (chartType == ChartType.LINE) {
+                    // Intraday Legend (Price, VWAP, Change, Volume)
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                            activeVWAP?.let {
+                                Text("均价: ${String.format(Locale.US, "%.2f", it)}", color = VwapYellow, fontSize = 10.sp, fontWeight = FontWeight.Medium)
+                            }
+                            previousClose?.let {
+                                Text("昨收: ${String.format(Locale.US, "%.2f", it)}", color = TextMuted, fontSize = 10.sp)
+                            }
+                        }
+                        Text("量: ${formatVolumeInLots(activeCandle.volume)}", color = TextMuted, fontSize = 10.sp)
+                    }
+                } else {
+                    // K-Line Legend (Open, High, Low, Volume)
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Text("开: ${String.format(Locale.US, "%.2f", activeCandle.open)}", color = TextMuted, fontSize = 10.sp)
+                        Text("高: ${String.format(Locale.US, "%.2f", activeCandle.high)}", color = TextMuted, fontSize = 10.sp)
+                        Text("低: ${String.format(Locale.US, "%.2f", activeCandle.low)}", color = TextMuted, fontSize = 10.sp)
+                        Text("量: ${formatVolumeInLots(activeCandle.volume)}", color = TextMuted, fontSize = 10.sp)
+                    }
 
-            if (showMA && chartType == ChartType.CANDLESTICK) {
-                Spacer(modifier = Modifier.height(3.dp))
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(10.dp)
-                ) {
-                    activeMA5?.let { Text("MA5: ${String.format(Locale.US, "%.2f", it)}", color = MA5Color, fontSize = 10.sp) }
-                    activeMA10?.let { Text("MA10: ${String.format(Locale.US, "%.2f", it)}", color = MA10Color, fontSize = 10.sp) }
-                    activeMA20?.let { Text("MA20: ${String.format(Locale.US, "%.2f", it)}", color = MA20Color, fontSize = 10.sp) }
+                    if (showMA) {
+                        Spacer(modifier = Modifier.height(3.dp))
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(10.dp)
+                        ) {
+                            activeMA5?.let { Text("MA5: ${String.format(Locale.US, "%.2f", it)}", color = MA5Color, fontSize = 10.sp) }
+                            activeMA10?.let { Text("MA10: ${String.format(Locale.US, "%.2f", it)}", color = MA10Color, fontSize = 10.sp) }
+                            activeMA20?.let { Text("MA20: ${String.format(Locale.US, "%.2f", it)}", color = MA20Color, fontSize = 10.sp) }
+                        }
+                    }
                 }
             }
         }
@@ -275,7 +298,7 @@ fun CandlestickChart(
                 drawMALine(vol10.map { it?.let { (it / maxVolume) * volumeChartHeight } }, candleWidth, 0.0, volumeChartHeight.toDouble(), volumeChartHeight, MA10Color, yOffset = volumeChartTop)
 
             } else {
-                // INTRADAY LINE CHART with East Money smooth gradient
+                // INTRADAY LINE CHART with East Money smooth gradient & VWAP line
                 val linePath = Path()
                 val fillPath = Path()
 
@@ -292,8 +315,8 @@ fun CandlestickChart(
                         fillPath.lineTo(x, y)
                     }
 
-                    // Volume Bar in Intraday: color based on close >= prev close or open
-                    val prevPrice = if (i > 0) candles[i - 1].close else candle.open
+                    // Volume Bar in Intraday: color based on close >= prev tick
+                    val prevPrice = if (i > 0) candles[i - 1].close else (previousClose ?: candle.open)
                     val isUp = candle.close >= prevPrice
                     val color = if (isUp) stockColors.upColor else stockColors.downColor
                     val volHeight = (candle.volume.toFloat() / maxVolume) * volumeChartHeight
@@ -308,22 +331,25 @@ fun CandlestickChart(
                 fillPath.lineTo(lastX, priceChartHeight)
                 fillPath.close()
 
-                // Draw gradient under line
+                // Draw gradient under price line
                 drawPath(
                     path = fillPath,
                     brush = Brush.verticalGradient(
-                        colors = listOf(PrimaryBlue.copy(alpha = 0.40f), PrimaryBlue.copy(alpha = 0.03f)),
+                        colors = listOf(Color(0xFF38BDF8).copy(alpha = 0.35f), Color(0xFF38BDF8).copy(alpha = 0.02f)),
                         startY = 0f,
                         endY = priceChartHeight
                     )
                 )
 
-                // Draw line
+                // Draw main price line (White-Blue)
                 drawPath(
                     path = linePath,
-                    color = PrimaryBlue,
-                    style = Stroke(width = 2.5f, cap = StrokeCap.Round)
+                    color = Color(0xFF38BDF8),
+                    style = Stroke(width = 2.2f, cap = StrokeCap.Round)
                 )
+
+                // Draw VWAP (分时均价线 - Yellow) - East Money classic!
+                drawMALine(vwap, candleWidth, adjustedMinPrice, priceSpan, priceChartHeight, VwapYellow)
             }
 
             // Crosshair overlay if selected
@@ -379,6 +405,30 @@ fun CandlestickChart(
                     activeVol5?.let { Text("VOL5: ${formatVolumeInLots(it.toLong())}", color = MA5Color, fontSize = 9.sp) }
                     activeVol10?.let { Text("VOL10: ${formatVolumeInLots(it.toLong())}", color = MA10Color, fontSize = 9.sp) }
                 }
+            }
+        }
+
+        // Time Axis Markers (East Money style: 09:30, 10:30, 11:30/13:00, 14:00, 15:00)
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(top = 2.dp),
+            horizontalArrangement = Arrangement.SpaceBetween
+        ) {
+            if (chartType == ChartType.LINE) {
+                Text("09:30", color = TextMuted, fontSize = 9.sp)
+                Text("10:30", color = TextMuted, fontSize = 9.sp)
+                Text("11:30/13:00", color = TextMuted, fontSize = 9.sp)
+                Text("14:00", color = TextMuted, fontSize = 9.sp)
+                Text("15:00", color = TextMuted, fontSize = 9.sp)
+            } else {
+                val dayFormat = remember { SimpleDateFormat("MM-dd", Locale.getDefault()) }
+                val startDay = candles.firstOrNull()?.let { dayFormat.format(Date(it.timestamp)) } ?: ""
+                val midDay = candles.getOrNull(candles.size / 2)?.let { dayFormat.format(Date(it.timestamp)) } ?: ""
+                val endDay = candles.lastOrNull()?.let { dayFormat.format(Date(it.timestamp)) } ?: ""
+                Text(startDay, color = TextMuted, fontSize = 9.sp)
+                Text(midDay, color = TextMuted, fontSize = 9.sp)
+                Text(endDay, color = TextMuted, fontSize = 9.sp)
             }
         }
     }
@@ -496,4 +546,17 @@ private fun formatVolumeInLots(vol: Long): String {
         else -> vol.toString()
     }
 }
+
+private fun calculateVWAP(candles: List<CandlePoint>): List<Double?> {
+    var cumVol = 0.0
+    var cumAmt = 0.0
+    return candles.map { candle ->
+        val vol = candle.volume.toDouble().coerceAtLeast(1.0)
+        val tp = (candle.open + candle.high + candle.low + candle.close) / 4.0
+        cumVol += vol
+        cumAmt += tp * vol
+        if (cumVol > 0.0) cumAmt / cumVol else candle.close
+    }
+}
+
 

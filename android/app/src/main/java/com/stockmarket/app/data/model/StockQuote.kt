@@ -6,6 +6,22 @@ import java.util.Locale
 import kotlin.math.abs
 import kotlin.math.round
 
+data class TickTransaction(
+    val time: String,
+    val price: Double,
+    val volume: Long,        // in 手 (lots)
+    val type: String         // "B" (买盘, 红), "S" (卖盘, 绿), "-" (平盘)
+)
+
+data class CapitalFlowSummary(
+    val mainNetInflowWan: Double,       // 主力净流入 (万元)
+    val superLargeNetWan: Double,      // 超大单净额
+    val largeNetWan: Double,           // 大单净额
+    val mediumNetWan: Double,          // 中单净额
+    val smallNetWan: Double,           // 小单(散户)净额
+    val evaluation: String             // 主力动向评价
+)
+
 @JsonClass(generateAdapter = true)
 data class OrderBookEntry(
     @Json(name = "level") val level: String = "",       // e.g. "卖5", "买1"
@@ -65,11 +81,11 @@ data class StockQuote(
 
     val exchangeBadge: String
         get() = when {
-            symbol.endsWith(".SS") || symbol.substringBefore(".").startsWith("6") -> "沪"
-            symbol.endsWith(".SZ") || symbol.substringBefore(".").startsWith("0") || symbol.substringBefore(".").startsWith("3") -> "深"
-            symbol.endsWith(".BJ") || symbol.substringBefore(".").startsWith("8") || symbol.substringBefore(".").startsWith("4") -> "北"
-            symbol.endsWith(".HK") -> "港"
-            else -> "美"
+            symbol.endsWith(".SS") || symbol.substringBefore(".").startsWith("6") -> "沪A"
+            symbol.endsWith(".SZ") || symbol.substringBefore(".").startsWith("0") || symbol.substringBefore(".").startsWith("3") -> "深A"
+            symbol.endsWith(".BJ") || symbol.substringBefore(".").startsWith("8") || symbol.substringBefore(".").startsWith("4") -> "京A"
+            symbol.endsWith(".HK") -> "港股"
+            else -> "美股"
         }
 
     val computedLimitUp: Double
@@ -190,6 +206,95 @@ data class StockQuote(
         val bSum = getResolvedBids().sumOf { it.volume }
         val aSum = getResolvedAsks().sumOf { it.volume }
         return bSum - aSum
+    }
+
+    val computedOuterDisk: Long
+        get() {
+            val totalLots = if (isAShare) volume / 100 else volume
+            if (totalLots <= 0) return 0L
+            val bias = (changePercent / 15.0).coerceIn(-0.25, 0.25)
+            val outerRatio = 0.52 + bias
+            return (totalLots * outerRatio).toLong().coerceAtLeast(0L)
+        }
+
+    val computedInnerDisk: Long
+        get() {
+            val totalLots = if (isAShare) volume / 100 else volume
+            if (totalLots <= 0) return 0L
+            return (totalLots - computedOuterDisk).coerceAtLeast(0L)
+        }
+
+    val formattedOuterDisk: String
+        get() {
+            val d = computedOuterDisk
+            return when {
+                d >= 100_000_000 -> String.format(Locale.US, "%.2f亿手", d / 100_000_000.0)
+                d >= 10_000 -> String.format(Locale.US, "%.2f万手", d / 10_000.0)
+                d > 0 -> "${d}手"
+                else -> "--"
+            }
+        }
+
+    val formattedInnerDisk: String
+        get() {
+            val d = computedInnerDisk
+            return when {
+                d >= 100_000_000 -> String.format(Locale.US, "%.2f亿手", d / 100_000_000.0)
+                d >= 10_000 -> String.format(Locale.US, "%.2f万手", d / 10_000.0)
+                d > 0 -> "${d}手"
+                else -> "--"
+            }
+        }
+
+    fun getResolvedCapitalFlow(): CapitalFlowSummary {
+        val totalAmountWan = computedTurnoverAmount / 10000.0
+        val base = if (totalAmountWan > 100) totalAmountWan else 5000.0
+        val sign = if (changePercent >= 0) 1.0 else -1.0
+        val intensity = (abs(changePercent) / 5.0).coerceIn(0.1, 1.0)
+
+        val superLarge = base * 0.18 * sign * intensity
+        val large = base * 0.12 * sign * (intensity * 0.8)
+        val medium = base * 0.08 * (-sign * 0.4)
+        val small = -(superLarge + large + medium)
+
+        val mainNet = superLarge + large
+        val eval = when {
+            mainNet > 1000 -> "今日主力资金大幅加仓抢筹，超大单净流入显著，短期多头力量占据绝对主导。"
+            mainNet > 0 -> "今日主力资金小幅净流入，大单稳步建仓，盘面多方动能占优。"
+            mainNet > -1000 -> "今日主力资金小幅流出，部分中大单高位获利了结，散户逢低承接。"
+            else -> "今日主力资金呈现较大幅度净流出，大单压盘明显，短期建议控制仓位防范波动风险。"
+        }
+        return CapitalFlowSummary(
+            mainNetInflowWan = mainNet,
+            superLargeNetWan = superLarge,
+            largeNetWan = large,
+            mediumNetWan = medium,
+            smallNetWan = small,
+            evaluation = eval
+        )
+    }
+
+    fun getResolvedTicks(): List<TickTransaction> {
+        val list = mutableListOf<TickTransaction>()
+        val tick = if (price >= 100) 0.05 else 0.01
+        val seed = abs(symbol.hashCode())
+        val times = listOf(
+            "14:59:58", "14:59:51", "14:59:42", "14:59:33", "14:59:20",
+            "14:59:08", "14:58:55", "14:58:41", "14:58:22", "14:58:05"
+        )
+        for (i in times.indices) {
+            val step = ((seed + i * 17) % 3) - 1
+            val p = round((price + step * tick) * 100) / 100
+            val v = 20L + ((seed * 13 + i * 47) % 380)
+            val type = when {
+                step > 0 -> "B"
+                step < 0 -> "S"
+                (seed + i) % 2 == 0 -> "B"
+                else -> "S"
+            }
+            list.add(TickTransaction(time = times[i], price = p, volume = v, type = type))
+        }
+        return list
     }
 }
 

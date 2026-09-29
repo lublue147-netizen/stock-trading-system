@@ -29,32 +29,49 @@ fun TimeframeSelector(
         "全部" to "all"
     )
 
-    Row(
-        modifier = modifier
-            .fillMaxWidth()
-            .clip(RoundedCornerShape(8.dp))
-            .background(SurfaceDark)
-            .padding(3.dp),
-        horizontalArrangement = Arrangement.SpaceBetween
-    ) {
-        options.forEach { (label, value) ->
-            val isSelected = selectedRange == value
-            Box(
-                modifier = Modifier
-                    .weight(1f)
-                    .clip(RoundedCornerShape(6.dp))
-                    .background(if (isSelected) PrimaryBlue else androidx.compose.ui.graphics.Color.Transparent)
-                    .clickable { onRangeSelected(value) }
-                    .padding(vertical = 7.dp),
-                contentAlignment = Alignment.Center
-            ) {
-                Text(
-                    text = label,
-                    color = if (isSelected) androidx.compose.ui.graphics.Color.White else TextSecondary,
-                    fontSize = 12.sp,
-                    fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal
-                )
+    Column(modifier = modifier.fillMaxWidth()) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .background(SurfaceDark)
+                .padding(horizontal = 4.dp),
+            horizontalArrangement = Arrangement.SpaceBetween
+        ) {
+            options.forEach { (label, value) ->
+                val isSelected = selectedRange == value
+                Column(
+                    modifier = Modifier
+                        .weight(1f)
+                        .clickable { onRangeSelected(value) }
+                        .padding(top = 10.dp, bottom = 6.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally
+                ) {
+                    Text(
+                        text = label,
+                        color = if (isSelected) EastMoneyRed else TextSecondary,
+                        fontSize = 13.sp,
+                        fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium
+                    )
+                    Spacer(modifier = Modifier.height(6.dp))
+                    if (isSelected) {
+                        Box(
+                            modifier = Modifier
+                                .width(22.dp)
+                                .height(2.5.dp)
+                                .clip(RoundedCornerShape(1.5.dp))
+                                .background(EastMoneyRed)
+                        )
+                    } else {
+                        Spacer(modifier = Modifier.height(2.5.dp))
+                    }
+                }
             }
         }
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(0.8.dp)
+                .background(SurfaceBorder.copy(alpha = 0.5f))
+        )
     }
 }

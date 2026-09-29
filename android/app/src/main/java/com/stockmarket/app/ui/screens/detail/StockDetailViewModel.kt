@@ -19,8 +19,8 @@ data class StockDetailUiState(
     val isLoadingChart: Boolean = false,
     val quote: StockQuote? = null,
     val historicalData: HistoricalData? = null,
-    val selectedRange: String = "1mo",
-    val chartType: ChartType = ChartType.CANDLESTICK,
+    val selectedRange: String = "1d",
+    val chartType: ChartType = ChartType.LINE,
     val isWatchlisted: Boolean = false,
     val showMA: Boolean = true,
     val errorMessage: String? = null
