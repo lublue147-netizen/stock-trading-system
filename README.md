@@ -2,9 +2,11 @@
 
 一款现代化的股票行情查看 Android 客户端应用与 Cloudflare Worker 边缘计算服务端。
 
-### 🚀 实时在线服务与构建产物
+### 🚀 实时在线服务与发布下载
+- **📦 GitHub Release v1.0.0 正式发布**: [Release v1.0.0 页面](https://github.com/lublue147-netizen/stock-trading-system/releases/tag/v1.0.0)
+- **📲 APK 直接下载**: [**StockVision-v1.0.0.apk (17.07 MB)**](https://github.com/lublue147-netizen/stock-trading-system/releases/download/v1.0.0/StockVision-v1.0.0.apk)
 - **GitHub 仓库**: [lublue147-netizen/stock-trading-system](https://github.com/lublue147-netizen/stock-trading-system)
-- **Android APK 云端构建产物**: [GitHub Actions Run #36524359649](https://github.com/lublue147-netizen/stock-trading-system/actions/runs/36524359649) (可直接下载 `StockVision-Debug-APK.zip`)
+- **Android APK CI 构建历史**: [GitHub Actions Runs](https://github.com/lublue147-netizen/stock-trading-system/actions)
 - **已部署 Cloudflare Worker**: [`https://stock-trading-worker.lublue147.workers.dev`](https://stock-trading-worker.lublue147.workers.dev)
   - 健康检查: [`https://stock-trading-worker.lublue147.workers.dev/api/health`](https://stock-trading-worker.lublue147.workers.dev/api/health)
   - 实时行情: [`https://stock-trading-worker.lublue147.workers.dev/api/quote?symbol=AAPL`](https://stock-trading-worker.lublue147.workers.dev/api/quote?symbol=AAPL)

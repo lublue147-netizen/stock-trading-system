@@ -3,6 +3,8 @@ name: Build Android APK
 on:
   push:
     branches: [ main, master ]
+    tags:
+      - 'v*'
     paths:
       - 'android/**'
       - '.github/workflows/build-apk.yml'
@@ -11,6 +13,9 @@ on:
     paths:
       - 'android/**'
   workflow_dispatch:
+
+permissions:
+  contents: write
 
 jobs:
   build:
@@ -59,3 +64,12 @@ jobs:
           echo "- **应用名称**: StockVision 行情" >> $GITHUB_STEP_SUMMARY
           echo "- **架构**: Jetpack Compose + Material 3 + Kotlin" >> $GITHUB_STEP_SUMMARY
           echo "- **构建产物**: 可直接在上方 **Artifacts** 区域下载 \`StockVision-Debug-APK\` 安装包安装到手机或模拟器进行体验。" >> $GITHUB_STEP_SUMMARY
+
+      - name: Create GitHub Release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: android/app/build/outputs/apk/debug/*.apk
+          draft: false
+          prerelease: false
+          generate_release_notes: true

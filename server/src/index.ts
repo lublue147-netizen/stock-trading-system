@@ -1,102 +1,103 @@
-import { Hono } from 'hono';
-import { cors } from 'hono/cors';
 import { fetchStockQuote, fetchBatchQuotes, fetchHistoricalData, searchStocks, fetchMarketIndices } from './services/stockService';
 
-const app = new Hono();
+const corsHeaders: Record<string, string> = {
+  'Access-Control-Allow-Origin': '*',
+  'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
+  'Access-Control-Allow-Headers': 'Content-Type, Authorization',
+  'Access-Control-Max-Age': '86400',
+};
 
-// Enable CORS for all origins
-app.use('*', cors({
-  origin: '*',
-  allowMethods: ['GET', 'POST', 'OPTIONS'],
-  allowHeaders: ['Content-Type', 'Authorization'],
-  exposeHeaders: ['Content-Length'],
-  maxAge: 86400,
-}));
-
-// Welcome / API Documentation
-app.get('/', (c) => {
-  return c.json({
-    service: 'Stock Trading & Quotation API',
-    status: 'online',
-    version: '1.0.0',
-    endpoints: {
-      health: '/api/health',
-      quote: '/api/quote?symbol=AAPL',
-      quotes: '/api/quotes?symbols=AAPL,TSLA,NVDA',
-      history: '/api/history?symbol=AAPL&range=1mo&interval=1d',
-      search: '/api/search?q=Apple',
-      marketIndices: '/api/market/indices'
+function jsonResponse(data: unknown, status = 200, maxAge = 15): Response {
+  return new Response(JSON.stringify(data), {
+    status,
+    headers: {
+      'Content-Type': 'application/json',
+      'Cache-Control': `public, max-age=${maxAge}, s-maxage=${maxAge * 2}`,
+      ...corsHeaders,
     },
-    supportedRanges: ['1d', '5d', '1mo', '6mo', '1y', 'all']
   });
-});
+}
 
-// Health check
-app.get('/api/health', (c) => {
-  return c.json({ status: 'ok', timestamp: Date.now() });
-});
+export default {
+  async fetch(request: Request): Promise<Response> {
+    if (request.method === 'OPTIONS') {
+      return new Response(null, {
+        status: 204,
+        headers: corsHeaders,
+      });
+    }
 
-// Single stock quote
-app.get('/api/quote', async (c) => {
-  const symbol = c.req.query('symbol');
-  if (!symbol) {
-    return c.json({ error: 'Query parameter "symbol" is required' }, 400);
-  }
+    const url = new URL(request.url);
+    const path = url.pathname;
 
-  const quote = await fetchStockQuote(symbol);
-  c.header('Cache-Control', 'public, max-age=10, s-maxage=20');
-  return c.json(quote);
-});
+    if (path === '/' || path === '') {
+      return jsonResponse({
+        service: 'Stock Trading & Quotation API',
+        status: 'online',
+        version: '1.0.0',
+        endpoints: {
+          health: '/api/health',
+          quote: '/api/quote?symbol=AAPL',
+          quotes: '/api/quotes?symbols=AAPL,TSLA,NVDA',
+          history: '/api/history?symbol=AAPL&range=1mo&interval=1d',
+          search: '/api/search?q=Apple',
+          marketIndices: '/api/market/indices',
+        },
+        supportedRanges: ['1d', '5d', '1mo', '6mo', '1y', 'all'],
+      });
+    }
 
-// Batch stock quotes for Watchlist
-app.get('/api/quotes', async (c) => {
-  const symbolsParam = c.req.query('symbols');
-  if (!symbolsParam) {
-    return c.json({ error: 'Query parameter "symbols" is required, comma-separated' }, 400);
-  }
+    if (path === '/api/health') {
+      return jsonResponse({ status: 'ok', timestamp: Date.now() });
+    }
 
-  const symbols = symbolsParam.split(',').map(s => s.trim()).filter(Boolean);
-  if (symbols.length === 0) {
-    return c.json([]);
-  }
+    if (path === '/api/quote') {
+      const symbol = url.searchParams.get('symbol');
+      if (!symbol) {
+        return jsonResponse({ error: 'Query parameter "symbol" is required' }, 400);
+      }
+      const quote = await fetchStockQuote(symbol);
+      return jsonResponse(quote, 200, 10);
+    }
 
-  const quotes = await fetchBatchQuotes(symbols);
-  c.header('Cache-Control', 'public, max-age=10, s-maxage=20');
-  return c.json(quotes);
-});
+    if (path === '/api/quotes') {
+      const symbolsParam = url.searchParams.get('symbols');
+      if (!symbolsParam) {
+        return jsonResponse({ error: 'Query parameter "symbols" is required, comma-separated' }, 400);
+      }
+      const symbols = symbolsParam.split(',').map((s) => s.trim()).filter(Boolean);
+      if (symbols.length === 0) {
+        return jsonResponse([]);
+      }
+      const quotes = await fetchBatchQuotes(symbols);
+      return jsonResponse(quotes, 200, 10);
+    }
 
-// Stock historical K-line & trend data
-app.get('/api/history', async (c) => {
-  const symbol = c.req.query('symbol');
-  if (!symbol) {
-    return c.json({ error: 'Query parameter "symbol" is required' }, 400);
-  }
+    if (path === '/api/history') {
+      const symbol = url.searchParams.get('symbol');
+      if (!symbol) {
+        return jsonResponse({ error: 'Query parameter "symbol" is required' }, 400);
+      }
+      const range = url.searchParams.get('range') || '1mo';
+      const interval = url.searchParams.get('interval') || undefined;
+      const history = await fetchHistoricalData(symbol, range, interval);
+      return jsonResponse(history, 200, 30);
+    }
 
-  const range = c.req.query('range') || '1mo';
-  const interval = c.req.query('interval');
+    if (path === '/api/search') {
+      const q = url.searchParams.get('q');
+      if (!q) {
+        return jsonResponse([]);
+      }
+      const results = await searchStocks(q);
+      return jsonResponse(results, 200, 300);
+    }
 
-  const history = await fetchHistoricalData(symbol, range, interval);
-  c.header('Cache-Control', 'public, max-age=30, s-maxage=60');
-  return c.json(history);
-});
+    if (path === '/api/market/indices') {
+      const indices = await fetchMarketIndices();
+      return jsonResponse(indices, 200, 15);
+    }
 
-// Search stocks by symbol or name
-app.get('/api/search', async (c) => {
-  const q = c.req.query('q');
-  if (!q) {
-    return c.json([]);
-  }
-
-  const results = await searchStocks(q);
-  c.header('Cache-Control', 'public, max-age=300, s-maxage=600');
-  return c.json(results);
-});
-
-// Market indices overview
-app.get('/api/market/indices', async (c) => {
-  const indices = await fetchMarketIndices();
-  c.header('Cache-Control', 'public, max-age=15, s-maxage=30');
-  return c.json(indices);
-});
-
-export default app;
+    return jsonResponse({ error: 'Not Found' }, 404);
+  },
+};

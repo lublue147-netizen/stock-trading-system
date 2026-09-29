@@ -16,6 +16,8 @@ local.properties
 server/node_modules/
 server/.wrangler/
 server/dist/
+server/out/
+server/worker.min.js
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
