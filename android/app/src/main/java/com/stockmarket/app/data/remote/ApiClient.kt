@@ -16,7 +16,7 @@ object ApiClient {
         .add(KotlinJsonAdapterFactory())
         .build()
 
-    private val okHttpClient = OkHttpClient.Builder()
+    val okHttpClient = OkHttpClient.Builder()
         .connectTimeout(15, TimeUnit.SECONDS)
         .readTimeout(20, TimeUnit.SECONDS)
         .addInterceptor(HttpLoggingInterceptor().apply {

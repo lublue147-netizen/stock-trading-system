@@ -5,41 +5,20 @@ const USER_AGENT = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36
 
 const CHINESE_NAME_CACHE = new Map<string, string>();
 
-export async function resolveChineseName(symbol: string): Promise<string | null> {
-  const cleanSymbol = symbol.trim().toUpperCase();
-  if (MOCK_STOCKS[cleanSymbol]?.quote?.name) {
-    return MOCK_STOCKS[cleanSymbol].quote.name;
-  }
-  if (CHINESE_NAME_CACHE.has(cleanSymbol)) {
-    return CHINESE_NAME_CACHE.get(cleanSymbol)!;
-  }
+export function symbolToTencentCode(symbol: string): string {
+  const clean = symbol.trim().toUpperCase();
+  const code = clean.replace(/\.(SS|SZ|BJ)$/i, '');
+  if (clean.endsWith('.SS') || code.startsWith('6')) return `sh${code}`;
+  if (clean.endsWith('.BJ') || code.startsWith('8') || code.startsWith('4') || code.startsWith('920')) return `bj${code}`;
+  return `sz${code}`;
+}
 
-  const code = cleanSymbol.replace(/\.(SS|SZ|BJ)$/i, '');
-  if (/^\d{6}$/.test(code)) {
-    try {
-      const url = `https://searchapi.eastmoney.com/api/suggest/get?input=${encodeURIComponent(code)}&type=14`;
-      const res = await fetch(url, { headers: { 'User-Agent': USER_AGENT } });
-      if (res.ok) {
-        const data = (await res.json()) as any;
-        const list = data?.QuotationCodeTable?.Data || [];
-        const match = list.find((it: any) => it.Code === code);
-        if (match?.Name) {
-          CHINESE_NAME_CACHE.set(cleanSymbol, match.Name);
-          return match.Name;
-        }
-      }
-    } catch {
-      // Ignore network errors in name resolution
-    }
-
-    const dictMatch = SEARCH_DICTIONARY.find(it => it.symbol.startsWith(code));
-    if (dictMatch) {
-      CHINESE_NAME_CACHE.set(cleanSymbol, dictMatch.name);
-      return dictMatch.name;
-    }
-  }
-
-  return null;
+export function tencentCodeToSymbol(code: string, prefix = ''): string {
+  const cleanCode = code.trim();
+  const p = prefix.toLowerCase();
+  if (p === 'sh' || cleanCode.startsWith('6')) return `${cleanCode}.SS`;
+  if (p === 'bj' || cleanCode.startsWith('8') || cleanCode.startsWith('4') || cleanCode.startsWith('920')) return `${cleanCode}.BJ`;
+  return `${cleanCode}.SZ`;
 }
 
 function getAShareExchange(symbol: string): string {
@@ -49,11 +28,108 @@ function getAShareExchange(symbol: string): string {
   return 'A股';
 }
 
+export function parseTencentQuote(line: string, fallbackSymbol?: string): StockQuote | null {
+  const parts = line.split('~');
+  if (parts.length < 35) return null;
+
+  const rawName = parts[1] || '';
+  const code = parts[2] || '';
+  const price = parseFloat(parts[3]) || 0;
+  const prevClose = parseFloat(parts[4]) || price;
+  const open = parseFloat(parts[5]) || price;
+  const volumeLots = parseInt(parts[6], 10) || 0;
+  const volume = volumeLots * 100; // in shares
+  const outerDisk = parseInt(parts[7], 10) || 0;
+  const innerDisk = parseInt(parts[8], 10) || 0;
+
+  const change = parseFloat(parts[31]) || Math.round((price - prevClose) * 100) / 100;
+  const changePercent = parseFloat(parts[32]) || (prevClose !== 0 ? Math.round((change / prevClose) * 10000) / 100 : 0);
+  const high = parseFloat(parts[33]) || price;
+  const low = parseFloat(parts[34]) || price;
+  const turnoverAmount = (parseFloat(parts[37]) || 0) * 10000;
+  const turnoverRate = parseFloat(parts[38]) || 0;
+  const peRatio = parts[39] ? parseFloat(parts[39]) : 25.0;
+  const amplitude = parseFloat(parts[43]) || (prevClose > 0 ? Math.round(((high - low) / prevClose) * 10000) / 100 : 0);
+  const floatMarketCap = parts[44] ? Math.round(parseFloat(parts[44]) * 100_000_000) : undefined;
+  const marketCap = parts[45] ? Math.round(parseFloat(parts[45]) * 100_000_000) : undefined;
+  const pbRatio = parts[46] ? parseFloat(parts[46]) : 3.2;
+  const limitUpPrice = parts[47] && parseFloat(parts[47]) > 0 ? parseFloat(parts[47]) : Math.round(prevClose * 1.10 * 100) / 100;
+  const limitDownPrice = parts[48] && parseFloat(parts[48]) > 0 ? parseFloat(parts[48]) : Math.round(prevClose * 0.90 * 100) / 100;
+
+  const sym = fallbackSymbol || tencentCodeToSymbol(code);
+  const exchangeName = getAShareExchange(sym);
+
+  const bids = [
+    { level: '买1', price: parseFloat(parts[9]) || 0, volume: parseInt(parts[10], 10) || 0, percent: 0.8 },
+    { level: '买2', price: parseFloat(parts[11]) || 0, volume: parseInt(parts[12], 10) || 0, percent: 0.6 },
+    { level: '买3', price: parseFloat(parts[13]) || 0, volume: parseInt(parts[14], 10) || 0, percent: 0.5 },
+    { level: '买4', price: parseFloat(parts[15]) || 0, volume: parseInt(parts[16], 10) || 0, percent: 0.4 },
+    { level: '买5', price: parseFloat(parts[17]) || 0, volume: parseInt(parts[18], 10) || 0, percent: 0.3 }
+  ];
+  const asks = [
+    { level: '卖5', price: parseFloat(parts[27]) || 0, volume: parseInt(parts[28], 10) || 0, percent: 0.3 },
+    { level: '卖4', price: parseFloat(parts[25]) || 0, volume: parseInt(parts[26], 10) || 0, percent: 0.4 },
+    { level: '卖3', price: parseFloat(parts[23]) || 0, volume: parseInt(parts[24], 10) || 0, percent: 0.5 },
+    { level: '卖2', price: parseFloat(parts[21]) || 0, volume: parseInt(parts[22], 10) || 0, percent: 0.6 },
+    { level: '卖1', price: parseFloat(parts[19]) || 0, volume: parseInt(parts[20], 10) || 0, percent: 0.8 }
+  ];
+
+  if (rawName && !CHINESE_NAME_CACHE.has(sym)) {
+    CHINESE_NAME_CACHE.set(sym, rawName);
+  }
+
+  return {
+    symbol: sym,
+    name: rawName || sym,
+    price,
+    change,
+    changePercent,
+    currency: 'CNY',
+    exchange: exchangeName,
+    open,
+    high,
+    low,
+    previousClose: prevClose,
+    volume,
+    timestamp: Date.now(),
+    limitUpPrice,
+    limitDownPrice,
+    amplitude,
+    turnoverRate,
+    turnoverAmount,
+    marketCap,
+    floatMarketCap,
+    peRatio,
+    pbRatio,
+    eps: Math.round((price / 25) * 100) / 100,
+    bps: Math.round((price / 4) * 100) / 100,
+    roe: 15.6,
+    bids,
+    asks
+  };
+}
+
 export async function fetchStockQuote(symbol: string): Promise<StockQuote> {
   const cleanSymbol = symbol.trim().toUpperCase();
-  const chineseName = await resolveChineseName(cleanSymbol);
-  const exchangeName = getAShareExchange(cleanSymbol);
+  const tCode = symbolToTencentCode(cleanSymbol);
 
+  // 1. Primary Engine: Tencent Finance real-time Level-1
+  try {
+    const url = `https://qt.gtimg.cn/q=${tCode}`;
+    const res = await fetch(url, { headers: { 'User-Agent': USER_AGENT } });
+    if (res.ok) {
+      const buffer = await res.arrayBuffer();
+      const text = new TextDecoder('gbk').decode(buffer);
+      const parsed = parseTencentQuote(text, cleanSymbol);
+      if (parsed && parsed.price > 0) {
+        return parsed;
+      }
+    }
+  } catch (err) {
+    console.warn(`Tencent fetch failed for ${cleanSymbol}:`, err);
+  }
+
+  // 2. Secondary Engine: Yahoo Finance
   try {
     const url = `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(cleanSymbol)}?range=1d&interval=1m`;
     const res = await fetch(url, {
@@ -87,12 +163,12 @@ export async function fetchStockQuote(symbol: string): Promise<StockQuote> {
 
         return {
           symbol: cleanSymbol,
-          name: chineseName || meta.longName || meta.shortName || cleanSymbol,
+          name: CHINESE_NAME_CACHE.get(cleanSymbol) || meta.longName || meta.shortName || cleanSymbol,
           price: currentPrice,
           change,
           changePercent,
           currency: 'CNY',
-          exchange: exchangeName,
+          exchange: getAShareExchange(cleanSymbol),
           open,
           high,
           low,
@@ -117,29 +193,28 @@ export async function fetchStockQuote(symbol: string): Promise<StockQuote> {
       }
     }
   } catch (err) {
-    console.warn(`Failed to fetch live quote for ${cleanSymbol}:`, err);
+    console.warn(`Yahoo live quote failed for ${cleanSymbol}:`, err);
   }
 
-  // Fallback to mock data or generated data
+  // 3. Fallback to mock data
   if (MOCK_STOCKS[cleanSymbol]) {
     return {
       ...MOCK_STOCKS[cleanSymbol].quote,
-      name: chineseName || MOCK_STOCKS[cleanSymbol].quote.name,
-      exchange: exchangeName,
+      name: CHINESE_NAME_CACHE.get(cleanSymbol) || MOCK_STOCKS[cleanSymbol].quote.name,
+      exchange: getAShareExchange(cleanSymbol),
       timestamp: Date.now()
     };
   }
 
-  // Synthetic fallback for A-shares
   const base = 15 + ((cleanSymbol.charCodeAt(0) * 3) % 85);
   return {
     symbol: cleanSymbol,
-    name: chineseName || `${cleanSymbol}`,
+    name: CHINESE_NAME_CACHE.get(cleanSymbol) || cleanSymbol,
     price: base,
     change: 0.25,
     changePercent: 1.25,
     currency: "CNY",
-    exchange: exchangeName,
+    exchange: getAShareExchange(cleanSymbol),
     open: Math.round((base - 0.15) * 100) / 100,
     high: Math.round((base + 0.45) * 100) / 100,
     low: Math.round((base - 0.25) * 100) / 100,
@@ -150,14 +225,94 @@ export async function fetchStockQuote(symbol: string): Promise<StockQuote> {
 }
 
 export async function fetchBatchQuotes(symbols: string[]): Promise<StockQuote[]> {
-  const promises = symbols.map(s => fetchStockQuote(s));
-  return Promise.all(promises);
+  if (symbols.length === 0) return [];
+
+  // Primary: Batch query to Tencent Finance (ultra-fast single request)
+  try {
+    const tCodes = symbols.map(s => symbolToTencentCode(s));
+    const url = `https://qt.gtimg.cn/q=${tCodes.join(',')}`;
+    const res = await fetch(url, { headers: { 'User-Agent': USER_AGENT } });
+    if (res.ok) {
+      const buffer = await res.arrayBuffer();
+      const text = new TextDecoder('gbk').decode(buffer);
+      const lines = text.split(';\n').filter(l => l.trim().length > 0);
+      const quoteMap = new Map<string, StockQuote>();
+
+      for (const line of lines) {
+        const parsed = parseTencentQuote(line);
+        if (parsed) {
+          quoteMap.set(parsed.symbol, parsed);
+        }
+      }
+
+      const results: StockQuote[] = [];
+      for (const sym of symbols) {
+        const clean = sym.trim().toUpperCase();
+        const found = quoteMap.get(clean) || Array.from(quoteMap.values()).find(q => q.symbol.startsWith(clean.replace(/\.(SS|SZ|BJ)$/i, '')));
+        if (found) {
+          results.push(found);
+        } else {
+          results.push(await fetchStockQuote(clean));
+        }
+      }
+      return results;
+    }
+  } catch (err) {
+    console.warn('Batch Tencent fetch failed, falling back to individual queries:', err);
+  }
+
+  // Fallback
+  return Promise.all(symbols.map(s => fetchStockQuote(s)));
 }
 
 export async function fetchHistoricalData(symbol: string, range = '1mo', interval?: string): Promise<HistoricalData> {
   const cleanSymbol = symbol.trim().toUpperCase();
+  const tCode = symbolToTencentCode(cleanSymbol);
 
-  // Pick suitable interval if not given
+  // 1. Primary Engine: Sina Finance KLine & Intraday
+  try {
+    let scale = 240;
+    let datalen = 30;
+    switch (range) {
+      case '1d': scale = 5; datalen = 48; break;
+      case '5d': scale = 15; datalen = 80; break;
+      case '1mo': scale = 240; datalen = 30; break;
+      case '6mo': scale = 240; datalen = 120; break;
+      case '1y': scale = 1200; datalen = 52; break;
+      case 'all': scale = 7200; datalen = 60; break;
+      default: scale = 240; datalen = 30; break;
+    }
+
+    const sinaUrl = `https://quotes.sina.cn/cn/api/json_v2.php/CN_MarketDataService.getKLineData?symbol=${tCode}&scale=${scale}&ma=no&datalen=${datalen}`;
+    const res = await fetch(sinaUrl, { headers: { 'User-Agent': USER_AGENT } });
+    if (res.ok) {
+      const list = await res.json() as any[];
+      if (Array.isArray(list) && list.length > 0) {
+        const candles: CandlePoint[] = list.map(item => {
+          const dateStr = item.day || '';
+          const ts = new Date(dateStr.replace(/-/g, '/')).getTime();
+          return {
+            timestamp: !isNaN(ts) ? ts : Date.now(),
+            open: parseFloat(item.open) || 0,
+            high: parseFloat(item.high) || 0,
+            low: parseFloat(item.low) || 0,
+            close: parseFloat(item.close) || 0,
+            volume: parseFloat(item.volume) || 0
+          };
+        });
+        return {
+          symbol: cleanSymbol,
+          range,
+          interval: `${scale}m`,
+          candles
+        };
+      }
+    }
+  } catch (err) {
+    console.warn(`Sina KLine fetch failed for ${cleanSymbol}:`, err);
+  }
+
+  // 2. Secondary Engine: Yahoo Finance
   let chosenInterval = interval;
   if (!chosenInterval) {
     switch (range) {
@@ -199,54 +354,36 @@ export async function fetchHistoricalData(symbol: string, range = '1mo', interva
           if (c !== null && c !== undefined && !isNaN(c)) {
             candles.push({
               timestamp: timestamps[i] * 1000,
-              open: Math.round((opens[i] ?? c) * 100) / 100,
-              high: Math.round((highs[i] ?? c) * 100) / 100,
-              low: Math.round((lows[i] ?? c) * 100) / 100,
-              close: Math.round(c * 100) / 100,
-              volume: Math.round(volumes[i] || 0)
+              open: opens[i] ?? c,
+              high: highs[i] ?? c,
+              low: lows[i] ?? c,
+              close: c,
+              volume: volumes[i] ?? 0
             });
           }
         }
 
         if (candles.length > 0) {
-          const high = Math.max(...candles.map(c => c.high));
-          const low = Math.min(...candles.map(c => c.low));
           return {
             symbol: cleanSymbol,
             range,
             interval: chosenInterval,
-            candles,
-            meta: {
-              currency: result.meta?.currency || 'CNY',
-              previousClose: result.meta?.chartPreviousClose || candles[0].open,
-              high,
-              low
-            }
+            candles
           };
         }
       }
     }
   } catch (err) {
-    console.warn(`Historical fetch failed for ${cleanSymbol}:`, err);
+    console.warn(`Yahoo history failed for ${cleanSymbol}:`, err);
   }
 
-  // Fallback to generated candles
-  const basePrice = MOCK_STOCKS[cleanSymbol]?.basePrice || 18.0;
-  const candles = generateMockCandles(cleanSymbol, range, basePrice);
-  const high = Math.max(...candles.map(c => c.high));
-  const low = Math.min(...candles.map(c => c.low));
-
+  // 3. Fallback to mock candles
+  const mockQuote = await fetchStockQuote(cleanSymbol);
   return {
     symbol: cleanSymbol,
     range,
-    interval: chosenInterval,
-    candles,
-    meta: {
-      currency: MOCK_STOCKS[cleanSymbol]?.quote?.currency || 'CNY',
-      previousClose: candles[0]?.open || basePrice,
-      high,
-      low
-    }
+    interval: chosenInterval || '1d',
+    candles: generateMockCandles(mockQuote.price, range)
   };
 }
 
@@ -270,7 +407,7 @@ export async function searchStocks(query: string): Promise<SearchResult[]> {
     }
   };
 
-  // 1. EastMoney suggest API (Best for Chinese stock names, pinyin, 6-digit codes)
+  // 1. EastMoney suggest API
   try {
     const url = `https://searchapi.eastmoney.com/api/suggest/get?input=${encodeURIComponent(cleanQ)}&type=14`;
     const res = await fetch(url, { headers: { 'User-Agent': USER_AGENT } });
@@ -301,7 +438,7 @@ export async function searchStocks(query: string): Promise<SearchResult[]> {
     console.warn(`Eastmoney suggest error for ${cleanQ}:`, err);
   }
 
-  // 2. Tencent Smartbox API (Excellent for fuzzy search and pinyin)
+  // 2. Tencent Smartbox API
   try {
     const url = `https://smartbox.gtimg.cn/s3/?q=${encodeURIComponent(cleanQ)}&t=all`;
     const res = await fetch(url, { headers: { 'User-Agent': USER_AGENT } });
@@ -313,13 +450,13 @@ export async function searchStocks(query: string): Promise<SearchResult[]> {
         for (const it of items) {
           const parts = it.split('~');
           if (parts.length >= 3) {
-            const market = parts[0].toLowerCase(); // sh, sz, bj
+            const market = parts[0].toLowerCase();
             const code = parts[1];
             let name = parts[2];
             try {
               name = JSON.parse(`"${name}"`);
             } catch {
-              // keep as-is
+              // keep
             }
             if (['sh', 'sz', 'bj'].includes(market) && /^\d{6}$/.test(code)) {
               const suffix = market === 'sh' ? 'SS' : (market === 'bj' ? 'BJ' : 'SZ');
@@ -356,20 +493,45 @@ export async function searchStocks(query: string): Promise<SearchResult[]> {
 }
 
 export async function fetchMarketIndices(): Promise<MarketIndex[]> {
-  const results: MarketIndex[] = [];
-  for (const index of MOCK_INDICES) {
-    try {
-      const quote = await fetchStockQuote(index.symbol);
-      results.push({
-        symbol: index.symbol,
-        name: index.name,
-        price: quote.price,
-        change: quote.change,
-        changePercent: quote.changePercent
-      });
-    } catch {
-      results.push(index);
+  try {
+    const url = 'https://qt.gtimg.cn/q=sh000001,sz399001,sz399006,sh000688,sh000300,bj899050';
+    const res = await fetch(url, { headers: { 'User-Agent': USER_AGENT } });
+    if (res.ok) {
+      const buffer = await res.arrayBuffer();
+      const text = new TextDecoder('gbk').decode(buffer);
+      const lines = text.split(';\n').filter(l => l.trim().length > 0);
+      const results: MarketIndex[] = [];
+      const map: Record<string, string> = {
+        '000001': '000001.SS',
+        '399001': '399001.SZ',
+        '399006': '399006.SZ',
+        '000688': '000688.SS',
+        '000300': '000300.SS',
+        '899050': '899050.BJ'
+      };
+
+      for (const line of lines) {
+        const parts = line.split('~');
+        if (parts.length > 32) {
+          const code = parts[2];
+          const name = parts[1];
+          const price = parseFloat(parts[3]) || 0;
+          const change = parseFloat(parts[31]) || 0;
+          const changePercent = parseFloat(parts[32]) || 0;
+          results.push({
+            symbol: map[code] || `${code}.SS`,
+            name,
+            price,
+            change,
+            changePercent
+          });
+        }
+      }
+      if (results.length > 0) return results;
     }
+  } catch (err) {
+    console.warn('Failed to fetch Tencent indices:', err);
   }
-  return results;
+
+  return MOCK_INDICES;
 }
