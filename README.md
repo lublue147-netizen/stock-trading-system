@@ -3,8 +3,9 @@
 一款现代化的股票行情查看 Android 客户端应用与 Cloudflare Worker 边缘计算服务端。
 
 ### 🚀 实时在线服务与发布下载
-- **📦 GitHub Release v1.0.0 正式发布**: [Release v1.0.0 页面](https://github.com/lublue147-netizen/stock-trading-system/releases/tag/v1.0.0)
-- **📲 APK 直接下载**: [**StockVision-v1.0.0.apk (17.07 MB)**](https://github.com/lublue147-netizen/stock-trading-system/releases/download/v1.0.0/StockVision-v1.0.0.apk)
+- **📦 GitHub Release 正式发布**: [**Release v1.0.1 页面**](https://github.com/lublue147-netizen/stock-trading-system/releases/tag/v1.0.1)
+- **🌟 正式 Release APK 下载**: [**`StockVision-Release.apk` (11.31 MB)**](https://github.com/lublue147-netizen/stock-trading-system/releases/download/v1.0.1/StockVision-Release.apk) *(生产签名优化，推荐安装)*
+- **🛠️ Debug APK 下载**: [**`StockVision-Debug.apk` (17.07 MB)**](https://github.com/lublue147-netizen/stock-trading-system/releases/download/v1.0.1/StockVision-Debug.apk)
 - **GitHub 仓库**: [lublue147-netizen/stock-trading-system](https://github.com/lublue147-netizen/stock-trading-system)
 - **Android APK CI 构建历史**: [GitHub Actions Runs](https://github.com/lublue147-netizen/stock-trading-system/actions)
 - **已部署 Cloudflare Worker**: [`https://stock-trading-worker.lublue147.workers.dev`](https://stock-trading-worker.lublue147.workers.dev)
