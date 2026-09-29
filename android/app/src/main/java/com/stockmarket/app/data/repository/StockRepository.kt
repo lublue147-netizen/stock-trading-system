@@ -104,22 +104,112 @@ class StockRepository(
 
     private fun createFallbackQuote(symbol: String): StockQuote {
         val clean = symbol.trim().uppercase()
-        val basePrice = when (clean) {
-            "AAPL" -> 231.41
-            "TSLA" -> 260.48
-            "NVDA" -> 138.25
-            "MSFT" -> 428.15
-            "0700.HK" -> 432.80
-            "600519.SS" -> 1560.00
-            else -> 100.0 + (clean.hashCode().coerceAtLeast(0) % 300)
+        val isAShare = clean.endsWith(".SS") || clean.endsWith(".SZ") || clean.endsWith(".BJ") || clean.matches(Regex("^[0-9]{6}(\\.[A-Za-z]+)?$"))
+        val isChiNextOrStar = clean.startsWith("300") || clean.startsWith("301") || clean.startsWith("688")
+
+        val (basePrice, pe, pb, eps, bps, roe, industry, business, concepts) = when (clean) {
+            "600519.SS", "600519" -> Tuple9(
+                1560.00, 26.2, 7.85, 58.50, 182.30, 32.1,
+                "食品饮料 / 白酒",
+                "茅台酒及系列酒的生产与销售，国内高档白酒绝对龙头企业。",
+                listOf("白酒龙头", "沪股通", "核心资产", "MSCI中国", "高股息", "大消费")
+            )
+            "300750.SZ", "300750" -> Tuple9(
+                248.50, 25.2, 5.62, 9.85, 44.20, 22.3,
+                "电力设备 / 动力电池",
+                "全球新能源汽车动力电池与储能系统研发制造龙头。",
+                listOf("动力电池", "储能系统", "新能源车", "创业板权重", "深股通")
+            )
+            "002594.SZ", "002594" -> Tuple9(
+                285.60, 27.6, 4.88, 10.35, 58.50, 17.7,
+                "汽车整车 / 新能源车",
+                "新能源汽车及关键零部件、刀片电池研发与出海制造领军企业。",
+                listOf("新能源车", "刀片电池", "深股通", "智能座舱", "出海龙头")
+            )
+            "300059.SZ", "300059" -> Tuple9(
+                22.80, 35.1, 3.25, 0.65, 7.02, 9.25,
+                "非银金融 / 证券互联网",
+                "以东方财富网为核心的互联网金融服务平台，证券、公募基金代销龙头。",
+                listOf("东方财富", "互金龙头", "券商概念", "创业板50", "深股通")
+            )
+            "601318.SS", "601318" -> Tuple9(
+                54.30, 8.76, 1.05, 6.20, 51.70, 12.0,
+                "非银金融 / 保险",
+                "全牌照综合金融服务集团，涵盖寿险、产险、银行、科技赋能。",
+                listOf("保险龙头", "中字头", "高股息", "沪股通", "沪深300")
+            )
+            "600036.SS", "600036" -> Tuple9(
+                38.60, 6.65, 0.88, 5.80, 43.80, 13.2,
+                "银行 / 股份制银行",
+                "国内领先的零售标杆银行，财富管理与金融科技领跑者。",
+                listOf("零售银行王", "高股息", "沪股通", "大金融", "核心资产")
+            )
+            "000858.SZ", "000858" -> Tuple9(
+                138.50, 17.5, 4.12, 7.90, 33.60, 23.5,
+                "食品饮料 / 白酒",
+                "浓香型白酒典型代表，高端名酒核心企业。",
+                listOf("浓香龙头", "深股通", "消费升级", "MSCI中国", "高分红")
+            )
+            "688981.SS", "688981" -> Tuple9(
+                95.20, 85.0, 3.80, 1.12, 25.05, 4.48,
+                "半导体 / 芯片制造",
+                "中国内地技术最先进、配套最完善、规模最大的集成电路制造企业。",
+                listOf("芯片制造", "科创50", "半导体代工", "国产替代", "硬科技")
+            )
+            "0700.HK" -> Tuple9(
+                432.80, 24.3, 3.95, 17.80, 109.50, 16.2,
+                "互联网与信息技术",
+                "社交网络(微信/QQ)、数字娱乐、金融科技及企业云服务。",
+                listOf("港股通", "社交龙头", "手游电竞", "云计算", "腾讯概念")
+            )
+            "AAPL" -> Tuple9(
+                231.41, 34.2, 48.5, 6.76, 4.77, 141.8,
+                "消费电子",
+                "iPhone、Mac、iPad及可穿戴设备软硬件生态。",
+                listOf("美股龙头", "消费电子", "AI手机", "纳斯达克100")
+            )
+            "TSLA" -> Tuple9(
+                260.48, 72.5, 12.8, 3.59, 20.35, 17.6,
+                "新能源汽车 / 自动驾驶",
+                "电动汽车、储能产品(Powerwall)与全自动驾驶(FSD)技术研发。",
+                listOf("特斯拉概念", "机器人Optimus", "自动驾驶", "储能")
+            )
+            else -> {
+                val seed = clean.hashCode().let { if (it < 0) -it else it }
+                val p = 20.0 + (seed % 180)
+                Tuple9(
+                    p, 25.0, 2.5, p / 20.0, p / 3.0, 10.0,
+                    if (isAShare) "A股制造业" else "科技创新",
+                    "致力于优质产品研发、智能化生产与海内外市场拓展。",
+                    listOf("A股精选", "核心资产", "稳健增长")
+                )
+            }
         }
+
         val change = round(basePrice * 0.015 * 100) / 100
         val changePercent = round((change / basePrice) * 10000) / 100
         val currency = when {
             clean.endsWith(".HK") -> "HKD"
-            clean.endsWith(".SS") || clean.endsWith(".SZ") -> "CNY"
-            else -> "USD"
+            clean.endsWith(".SS") || clean.endsWith(".SZ") || clean.endsWith(".BJ") -> "CNY"
+            else -> if (isAShare) "CNY" else "USD"
         }
+        val exchange = when {
+            clean.endsWith(".HK") -> "HKSE"
+            clean.endsWith(".SS") || clean.startsWith("6") -> "SSE"
+            clean.endsWith(".SZ") || clean.startsWith("0") || clean.startsWith("3") -> "SZSE"
+            clean.endsWith(".BJ") || clean.startsWith("8") || clean.startsWith("4") -> "BSE"
+            else -> "NASDAQ"
+        }
+
+        val limitRatio = if (isChiNextOrStar) 0.20 else 0.10
+        val prevClose = basePrice - change
+        val limitUp = round(prevClose * (1 + limitRatio) * 100) / 100
+        val limitDown = round(prevClose * (1 - limitRatio) * 100) / 100
+        val high = basePrice + abs(change) + (basePrice * 0.008)
+        val low = basePrice - abs(change) - (basePrice * 0.006)
+        val vol = 4520000L + (abs(clean.hashCode()) % 8000000)
+        val turnoverRate = 1.25 + ((abs(clean.hashCode()) % 30) / 10.0)
+        val turnoverAmt = round(basePrice * vol * 100) / 100
 
         return StockQuote(
             symbol = clean,
@@ -128,19 +218,36 @@ class StockRepository(
             change = change,
             changePercent = changePercent,
             currency = currency,
-            exchange = if (clean.endsWith(".HK")) "HKSE" else if (clean.endsWith(".SS")) "SSE" else "NASDAQ",
-            open = basePrice - 0.5,
-            high = basePrice + abs(change) + 1.2,
-            low = basePrice - abs(change) - 0.8,
-            previousClose = basePrice - change,
-            volume = 35240000L,
-            marketCap = 2500000000000L,
-            peRatio = 32.5,
-            fiftyTwoWeekHigh = basePrice * 1.25,
-            fiftyTwoWeekLow = basePrice * 0.75,
-            timestamp = System.currentTimeMillis()
+            exchange = exchange,
+            open = basePrice - (change * 0.3),
+            high = round(high * 100) / 100,
+            low = round(low * 100) / 100,
+            previousClose = round(prevClose * 100) / 100,
+            volume = vol,
+            marketCap = (basePrice * 1_200_000_000L).toLong(),
+            peRatio = pe,
+            fiftyTwoWeekHigh = round(basePrice * 1.25 * 100) / 100,
+            fiftyTwoWeekLow = round(basePrice * 0.75 * 100) / 100,
+            timestamp = System.currentTimeMillis(),
+            turnoverRate = round(turnoverRate * 100) / 100,
+            turnoverAmount = turnoverAmt,
+            amplitude = round(((high - low) / prevClose) * 10000) / 100,
+            pbRatio = pb,
+            floatMarketCap = (basePrice * 1_050_000_000L).toLong(),
+            limitUpPrice = limitUp,
+            limitDownPrice = limitDown,
+            eps = eps,
+            bps = bps,
+            roe = roe,
+            industry = industry,
+            mainBusiness = business,
+            conceptTags = concepts
         )
     }
+
+    private data class Tuple9<A, B, C, D, E, F, G, H, I>(
+        val a: A, val b: B, val c: C, val d: D, val e: E, val f: F, val g: G, val h: H, val i: I
+    )
 
     private fun createFallbackHistory(symbol: String, range: String): HistoricalData {
         val clean = symbol.trim().uppercase()

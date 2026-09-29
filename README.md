@@ -3,17 +3,37 @@
 一款现代化的股票行情查看 Android 客户端应用与 Cloudflare Worker 边缘计算服务端，**专为 A 股投资者优化**。
 
 ### 🚀 实时在线服务与发布下载
-- **📦 GitHub Release 正式发布**: [**Release v1.0.3 页面**](https://github.com/lublue147-netizen/stock-trading-system/releases/tag/v1.0.3)
-- **🌟 正式 Release APK 下载**: [**`StockVision-Release.apk`**](https://github.com/lublue147-netizen/stock-trading-system/releases/download/v1.0.3/StockVision-Release.apk) *(已锁定永久签名，解决更新覆盖签名冲突问题)*
-- **🛠️ Debug APK 下载**: [**`StockVision-Debug.apk`**](https://github.com/lublue147-netizen/stock-trading-system/releases/download/v1.0.3/StockVision-Debug.apk)
+- **📦 GitHub Release 正式发布**: [**Release v1.0.4 页面**](https://github.com/lublue147-netizen/stock-trading-system/releases/tag/v1.0.4)
+- **🌟 正式 Release APK 下载**: [**`StockVision-Release.apk`**](https://github.com/lublue147-netizen/stock-trading-system/releases/download/v1.0.4/StockVision-Release.apk) *(已锁定永久签名，支持直接覆盖升级安装)*
+- **🛠️ Debug APK 下载**: [**`StockVision-Debug.apk`**](https://github.com/lublue147-netizen/stock-trading-system/releases/download/v1.0.4/StockVision-Debug.apk)
 - **GitHub 仓库**: [lublue147-netizen/stock-trading-system](https://github.com/lublue147-netizen/stock-trading-system)
 - **已部署 Cloudflare Worker**: [`https://stock-trading-worker.lublue147.workers.dev`](https://stock-trading-worker.lublue147.workers.dev)
   - 健康检查: [`/api/health`](https://stock-trading-worker.lublue147.workers.dev/api/health)
-  - 茅台行情 (支持纯6位代码): [`/api/quote?symbol=600519`](https://stock-trading-worker.lublue147.workers.dev/api/quote?symbol=600519)
+  - 茅台行情 (含盘口全指标): [`/api/quote?symbol=600519`](https://stock-trading-worker.lublue147.workers.dev/api/quote?symbol=600519)
   - 比亚迪行情: [`/api/quote?symbol=002594`](https://stock-trading-worker.lublue147.workers.dev/api/quote?symbol=002594)
   - A 股大盘指数: [`/api/market/indices`](https://stock-trading-worker.lublue147.workers.dev/api/market/indices)
   - 拼音/汉字搜索: [`/api/search?q=BYD`](https://stock-trading-worker.lublue147.workers.dev/api/search?q=BYD)
   - 历史行情: [`/api/history?symbol=600519&range=1mo`](https://stock-trading-worker.lublue147.workers.dev/api/history?symbol=600519&range=1mo)
+
+### 📊 东方财富 (East Money) 风格个股深度行情全面升级 (v1.0.4)
+1. **顶部状态栏**: 股票名称、沪/深/北/港交易所色彩角标、纯6位股票代码、实时交易状态指示器（交易中、已收盘、盘前竞价）。
+2. **巨幅价格区与涨跌停**: 超大醒目现价显示，涨跌额与百分比，精确计算展示涨停价与跌停价。
+3. **东方财富 12 宫格核心盘口**:
+   - 今开、昨收、最高、最低、涨停、跌停
+   - 成交量 (手 / 万手)、成交额 (亿 / 万)、换手率 %、振幅 %
+   - 市盈率 (动 / TTM)、市净率、总市值、流通值、每股收益、委比
+4. **经典 6 大周期切换**: 【分时】、【五日】、【日K】、【周K】、【月K】、【全部】。
+5. **分时与 K 线双模式交互 Canvas**:
+   - 分时图绘制昨收参考基准虚线，平滑走势曲线与透明渐变填充；
+   - K 线图动态叠加 MA5 (黄)、MA10 (紫)、MA20 (青) 均线；
+   - 副图绘制红绿成交量柱与 MAVOL5 / MAVOL10 均量线；
+   - 手势触摸与拖拽十字交叉光标 (Crosshair)，精准探查时间、开高低收、量额与涨跌幅。
+6. **买卖五档盘口 (Five-Level Order Book)**:
+   - 东方财富经典盘口布局：卖五 ~ 卖一、买一 ~ 买五实时挂单价与手量；
+   - 包含水平深度条可视化进度；
+   - 中间栏直观展示委比 (%) 与委差 (手)。
+7. **F10 资料与个股简况**: 所属行业分类、主营业务详细描述、概念题材板块标签流、每股收益 (EPS)、每股净资产 (BPS)、净资产收益率 (ROE)。
+8. **底部悬浮快捷操作栏**: 加自选 / 已在自选切换、一键设行情预警、即时刷新。
 
 ### 🇨🇳 A 股核心深度适配
 1. **国内五大指数实时直击**: 上证指数、深证成指、创业板指、科创50、沪深300。

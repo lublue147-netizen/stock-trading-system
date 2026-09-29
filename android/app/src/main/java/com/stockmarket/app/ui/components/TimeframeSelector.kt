@@ -21,12 +21,12 @@ fun TimeframeSelector(
     modifier: Modifier = Modifier
 ) {
     val options = listOf(
-        "1D" to "1d",
-        "5D" to "5d",
-        "1M" to "1mo",
-        "6M" to "6mo",
-        "1Y" to "1y",
-        "ALL" to "all"
+        "分时" to "1d",
+        "五日" to "5d",
+        "日K" to "1mo",
+        "周K" to "1y",
+        "月K" to "5y",
+        "全部" to "all"
     )
 
     Row(
@@ -34,7 +34,7 @@ fun TimeframeSelector(
             .fillMaxWidth()
             .clip(RoundedCornerShape(8.dp))
             .background(SurfaceDark)
-            .padding(4.dp),
+            .padding(3.dp),
         horizontalArrangement = Arrangement.SpaceBetween
     ) {
         options.forEach { (label, value) ->
@@ -45,14 +45,14 @@ fun TimeframeSelector(
                     .clip(RoundedCornerShape(6.dp))
                     .background(if (isSelected) PrimaryBlue else androidx.compose.ui.graphics.Color.Transparent)
                     .clickable { onRangeSelected(value) }
-                    .padding(vertical = 6.dp),
+                    .padding(vertical = 7.dp),
                 contentAlignment = Alignment.Center
             ) {
                 Text(
                     text = label,
-                    color = if (isSelected) TextPrimary else TextSecondary,
+                    color = if (isSelected) androidx.compose.ui.graphics.Color.White else TextSecondary,
                     fontSize = 12.sp,
-                    fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium
+                    fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal
                 )
             }
         }

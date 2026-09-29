@@ -59,8 +59,9 @@ class StockDetailViewModel(
     }
 
     fun loadHistory(range: String) {
+        val suggestedType = if (range == "1d" || range == "5d") ChartType.LINE else ChartType.CANDLESTICK
         viewModelScope.launch {
-            _uiState.update { it.copy(isLoadingChart = true, selectedRange = range) }
+            _uiState.update { it.copy(isLoadingChart = true, selectedRange = range, chartType = suggestedType) }
             val res = repository.getHistoricalData(symbol, range)
             _uiState.update {
                 it.copy(
@@ -70,6 +71,10 @@ class StockDetailViewModel(
                 )
             }
         }
+    }
+
+    fun setChartType(type: ChartType) {
+        _uiState.update { it.copy(chartType = type) }
     }
 
     fun toggleChartType() {
