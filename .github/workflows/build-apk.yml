@@ -38,12 +38,17 @@ jobs:
       - name: Grant execute permission for gradlew
         run: chmod +x android/gradlew
 
-      - name: Setup Release Keystore
+      - name: Verify Permanent Release Keystore
         run: |
-          keytool -genkeypair -v -keystore android/app/release.keystore \
-            -alias stockvision -keyalg RSA -keysize 2048 -validity 10000 \
-            -storepass stockvision123 -keypass stockvision123 \
-            -dname "CN=StockVision, OU=Mobile, O=StockVision, L=US, S=CA, C=US"
+          if [ -f android/app/release.keystore ]; then
+            echo "✅ Found permanent committed release.keystore ($(wc -c < android/app/release.keystore) bytes)"
+          else
+            echo "⚠️ Generating fallback keystore..."
+            keytool -genkeypair -v -keystore android/app/release.keystore \
+              -alias stockvision -keyalg RSA -keysize 2048 -validity 10000 \
+              -storepass stockvision123 -keypass stockvision123 \
+              -dname "CN=StockVision, OU=Mobile, O=StockVision, L=Shenzhen, S=Guangdong, C=CN"
+          fi
 
       - name: Build Android APKs (Release & Debug)
         run: |
