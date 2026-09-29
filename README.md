@@ -1,21 +1,26 @@
-# StockVision 股票行情查看 App
+# StockVision 股票行情查看 App (专注 A 股与全球市场)
 
-一款现代化的股票行情查看 Android 客户端应用与 Cloudflare Worker 边缘计算服务端。
+一款现代化的股票行情查看 Android 客户端应用与 Cloudflare Worker 边缘计算服务端，**专为 A 股投资者优化**。
 
 ### 🚀 实时在线服务与发布下载
-- **📦 GitHub Release 正式发布**: [**Release v1.0.1 页面**](https://github.com/lublue147-netizen/stock-trading-system/releases/tag/v1.0.1)
-- **🌟 正式 Release APK 下载**: [**`StockVision-Release.apk` (11.31 MB)**](https://github.com/lublue147-netizen/stock-trading-system/releases/download/v1.0.1/StockVision-Release.apk) *(生产签名优化，推荐安装)*
-- **🛠️ Debug APK 下载**: [**`StockVision-Debug.apk` (17.07 MB)**](https://github.com/lublue147-netizen/stock-trading-system/releases/download/v1.0.1/StockVision-Debug.apk)
+- **📦 GitHub Release 正式发布**: [**Release v1.0.2 页面**](https://github.com/lublue147-netizen/stock-trading-system/releases/tag/v1.0.2)
+- **🌟 正式 Release APK 下载**: [**`StockVision-Release.apk`**](https://github.com/lublue147-netizen/stock-trading-system/releases/download/v1.0.2/StockVision-Release.apk) *(生产签名优化，体积精简，推荐安装)*
+- **🛠️ Debug APK 下载**: [**`StockVision-Debug.apk`**](https://github.com/lublue147-netizen/stock-trading-system/releases/download/v1.0.2/StockVision-Debug.apk)
 - **GitHub 仓库**: [lublue147-netizen/stock-trading-system](https://github.com/lublue147-netizen/stock-trading-system)
-- **Android APK CI 构建历史**: [GitHub Actions Runs](https://github.com/lublue147-netizen/stock-trading-system/actions)
 - **已部署 Cloudflare Worker**: [`https://stock-trading-worker.lublue147.workers.dev`](https://stock-trading-worker.lublue147.workers.dev)
-  - 健康检查: [`https://stock-trading-worker.lublue147.workers.dev/api/health`](https://stock-trading-worker.lublue147.workers.dev/api/health)
-  - 实时行情: [`https://stock-trading-worker.lublue147.workers.dev/api/quote?symbol=AAPL`](https://stock-trading-worker.lublue147.workers.dev/api/quote?symbol=AAPL)
-  - 历史行情: [`https://stock-trading-worker.lublue147.workers.dev/api/history?symbol=AAPL&range=1mo`](https://stock-trading-worker.lublue147.workers.dev/api/history?symbol=AAPL&range=1mo)
-  - 股票搜索: [`https://stock-trading-worker.lublue147.workers.dev/api/search?q=Tesla`](https://stock-trading-worker.lublue147.workers.dev/api/search?q=Tesla)
-  - 全球大盘: [`https://stock-trading-worker.lublue147.workers.dev/api/market/indices`](https://stock-trading-worker.lublue147.workers.dev/api/market/indices)
+  - 健康检查: [`/api/health`](https://stock-trading-worker.lublue147.workers.dev/api/health)
+  - 茅台行情 (支持纯6位代码): [`/api/quote?symbol=600519`](https://stock-trading-worker.lublue147.workers.dev/api/quote?symbol=600519)
+  - 比亚迪行情: [`/api/quote?symbol=002594`](https://stock-trading-worker.lublue147.workers.dev/api/quote?symbol=002594)
+  - A 股大盘指数: [`/api/market/indices`](https://stock-trading-worker.lublue147.workers.dev/api/market/indices)
+  - 拼音/汉字搜索: [`/api/search?q=BYD`](https://stock-trading-worker.lublue147.workers.dev/api/search?q=BYD)
+  - 历史行情: [`/api/history?symbol=600519&range=1mo`](https://stock-trading-worker.lublue147.workers.dev/api/history?symbol=600519&range=1mo)
 
-支持自选股票管理、实时行情获取、大盘指数监控、以及专业交互式历史行情 K 线图/分时走势图。**无需在本地搭建任何 Android SDK 或 Gradle 构建环境**，代码推送到 GitHub 后已由 GitHub Actions 自动云端编译并产出 APK 安装包。
+### 🇨🇳 A 股核心深度适配
+1. **国内五大指数实时直击**: 上证指数、深证成指、创业板指、科创50、沪深300。
+2. **纯6位股票代码自动识别**: 无论输入 `600519`、`300750`、`002594` 均可自动补齐后缀并即时拉取。
+3. **拼音缩写与汉字联想搜索**: 支持输入 `BYD`、`GZMT`、`NDSD`、`DFCF` 或 `茅台`、`宁德` 模糊匹配。
+4. **纯正 A 股红涨绿跌习惯**: 默认启用红色代表上涨、绿色代表下跌的国内交易配色方案。
+5. **A 股龙头默认自选池**: 预置贵州茅台、宁德时代、比亚迪、中国平安、招商银行、东方财富、平安银行、五粮液、中芯国际等标的。
 
 ---
 

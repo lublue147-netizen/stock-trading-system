@@ -88,8 +88,14 @@ fun StockCard(
                 horizontalArrangement = Arrangement.spacedBy(10.dp)
             ) {
                 Column(horizontalAlignment = Alignment.End) {
+                    val currSign = when (quote.currency) {
+                        "CNY" -> "¥"
+                        "HKD" -> "HK$"
+                        "点" -> ""
+                        else -> "$"
+                    }
                     Text(
-                        text = String.format(Locale.US, "%.2f", quote.price),
+                        text = "$currSign${String.format(Locale.US, "%.2f", quote.price)}",
                         color = TextPrimary,
                         fontSize = 16.sp,
                         fontWeight = FontWeight.SemiBold

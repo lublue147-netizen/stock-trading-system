@@ -43,7 +43,7 @@ fun SearchScreen(
                     TextField(
                         value = state.query,
                         onValueChange = { viewModel.onQueryChange(it) },
-                        placeholder = { Text("输入代码/名称 (如 AAPL, 0700.HK, 茅台)", fontSize = 14.sp, color = TextMuted) },
+                        placeholder = { Text("输入代码/拼音/名称 (如 600519, BYD, 茅台)", fontSize = 14.sp, color = TextMuted) },
                         singleLine = true,
                         colors = TextFieldDefaults.colors(
                             focusedContainerColor = Color.Transparent,
@@ -95,9 +95,10 @@ fun SearchScreen(
                 Spacer(modifier = Modifier.height(10.dp))
                 LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     items(state.trendingStocks.take(8)) { item ->
+                        val shortCode = item.symbol.substringBefore('.')
                         SuggestionChip(
-                            onClick = { viewModel.onQueryChange(item.symbol) },
-                            label = { Text(item.symbol, fontSize = 12.sp) },
+                            onClick = { viewModel.onQueryChange(shortCode) },
+                            label = { Text("${item.name} ($shortCode)", fontSize = 12.sp) },
                             colors = SuggestionChipDefaults.suggestionChipColors(
                                 containerColor = SurfaceCard,
                                 labelColor = TextPrimary

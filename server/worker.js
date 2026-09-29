@@ -1,4 +1,4 @@
-// Cloudflare Worker for Stock Market Quotation & Trading System
+// Cloudflare Worker for A-Share Stock Quotation System
 // Zero-dependency native ES module
 
 const CORS_HEADERS = {
@@ -10,31 +10,125 @@ const CORS_HEADERS = {
 
 const USER_AGENT = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36';
 
+const A_SHARE_NAMES = {
+  '000001.SS': '上证指数',
+  '399001.SZ': '深证成指',
+  '399006.SZ': '创业板指',
+  '000688.SS': '科创50',
+  '000300.SS': '沪深300',
+  '000905.SS': '中证500',
+  '600519.SS': '贵州茅台',
+  '300750.SZ': '宁德时代',
+  '002594.SZ': '比亚迪',
+  '601318.SS': '中国平安',
+  '600036.SS': '招商银行',
+  '300059.SZ': '东方财富',
+  '000001.SZ': '平安银行',
+  '000858.SZ': '五粮液',
+  '688981.SS': '中芯国际',
+  '601857.SS': '中国石油',
+  '601288.SS': '农业银行',
+  '600900.SS': '长江电力',
+  '601988.SS': '中国银行',
+  '600028.SS': '中国石化',
+  '601628.SS': '中国人寿',
+  '002475.SZ': '立讯精密',
+  '000333.SZ': '美的集团',
+  '603288.SS': '海天味业',
+  '300124.SZ': '汇川技术',
+  '688111.SS': '金山办公',
+  '002415.SZ': '海康威视',
+  '601012.SS': '隆基绿能',
+  '600276.SS': '恒瑞医药',
+  '601888.SS': '中国中免',
+  '300015.SZ': '爱尔眼科',
+  '0700.HK': '腾讯控股',
+  '9988.HK': '阿里巴巴',
+  '3690.HK': '美团',
+  '1810.HK': '小米集团',
+  '^HSI': '恒生指数',
+  '^GSPC': '标普 500',
+  '^IXIC': '纳斯达克',
+  '^DJI': '道琼斯'
+};
+
 const MARKET_INDICES = [
-  { symbol: '^GSPC', name: 'S&P 500', price: 5864.67, change: 24.34, changePercent: 0.42 },
-  { symbol: '^IXIC', name: 'NASDAQ', price: 18415.21, change: 115.80, changePercent: 0.63 },
-  { symbol: '^DJI', name: 'Dow Jones', price: 42114.40, change: -140.59, changePercent: -0.33 },
-  { symbol: '000001.SS', name: '上证指数', price: 3279.82, change: 43.12, changePercent: 1.33 },
+  { symbol: '000001.SS', name: '上证指数', price: 3841.88, change: 18.26, changePercent: 0.48 },
+  { symbol: '399001.SZ', name: '深证成指', price: 12939.70, change: 80.95, changePercent: 0.63 },
+  { symbol: '399006.SZ', name: '创业板指', price: 3152.28, change: 12.46, changePercent: 0.40 },
+  { symbol: '000688.SS', name: '科创50', price: 1575.43, change: 19.45, changePercent: 1.25 },
+  { symbol: '000300.SS', name: '沪深300', price: 4357.12, change: 16.36, changePercent: 0.38 },
   { symbol: '^HSI', name: '恒生指数', price: 20590.15, change: 312.45, changePercent: 1.54 },
 ];
 
 const SEARCH_DICT = [
-  { symbol: 'AAPL', name: 'Apple Inc.', exchange: 'NASDAQ', type: 'Equity' },
-  { symbol: 'MSFT', name: 'Microsoft Corporation', exchange: 'NASDAQ', type: 'Equity' },
-  { symbol: 'GOOGL', name: 'Alphabet Inc.', exchange: 'NASDAQ', type: 'Equity' },
-  { symbol: 'AMZN', name: 'Amazon.com Inc.', exchange: 'NASDAQ', type: 'Equity' },
-  { symbol: 'NVDA', name: 'NVIDIA Corporation', exchange: 'NASDAQ', type: 'Equity' },
-  { symbol: 'TSLA', name: 'Tesla Inc.', exchange: 'NASDAQ', type: 'Equity' },
-  { symbol: 'META', name: 'Meta Platforms Inc.', exchange: 'NASDAQ', type: 'Equity' },
-  { symbol: 'BABA', name: 'Alibaba Group Holding Ltd.', exchange: 'NYSE', type: 'Equity' },
-  { symbol: '0700.HK', name: 'Tencent Holdings Ltd.', exchange: 'HKEX', type: 'Equity' },
-  { symbol: '600519.SS', name: '贵州茅台 (Kweichow Moutai)', exchange: 'SSE', type: 'Equity' },
-  { symbol: '300750.SZ', name: '宁德时代 (CATL)', exchange: 'SZSE', type: 'Equity' },
-  { symbol: '002594.SZ', name: '比亚迪 (BYD)', exchange: 'SZSE', type: 'Equity' },
-  { symbol: '^GSPC', name: 'S&P 500 Index', exchange: 'INDEX', type: 'Index' },
-  { symbol: '^IXIC', name: 'NASDAQ Composite', exchange: 'INDEX', type: 'Index' },
-  { symbol: '000001.SS', name: 'SSE Composite Index', exchange: 'SSE', type: 'Index' },
+  { symbol: '600519.SS', name: '贵州茅台', pinyin: 'GZMT', exchange: '上交所', type: 'A股' },
+  { symbol: '300750.SZ', name: '宁德时代', pinyin: 'NDSD', exchange: '深交所', type: 'A股' },
+  { symbol: '002594.SZ', name: '比亚迪', pinyin: 'BYD', exchange: '深交所', type: 'A股' },
+  { symbol: '601318.SS', name: '中国平安', pinyin: 'ZGPA', exchange: '上交所', type: 'A股' },
+  { symbol: '600036.SS', name: '招商银行', pinyin: 'ZSYH', exchange: '上交所', type: 'A股' },
+  { symbol: '300059.SZ', name: '东方财富', pinyin: 'DFCF', exchange: '深交所', type: 'A股' },
+  { symbol: '000001.SZ', name: '平安银行', pinyin: 'PAYH', exchange: '深交所', type: 'A股' },
+  { symbol: '000858.SZ', name: '五粮液', pinyin: 'WLY', exchange: '深交所', type: 'A股' },
+  { symbol: '688981.SS', name: '中芯国际', pinyin: 'ZXGJ', exchange: '上交所', type: '科创板' },
+  { symbol: '601857.SS', name: '中国石油', pinyin: 'ZGSY', exchange: '上交所', type: 'A股' },
+  { symbol: '601288.SS', name: '农业银行', pinyin: 'NYYH', exchange: '上交所', type: 'A股' },
+  { symbol: '600900.SS', name: '长江电力', pinyin: 'CJDL', exchange: '上交所', type: 'A股' },
+  { symbol: '601988.SS', name: '中国银行', pinyin: 'ZGYH', exchange: '上交所', type: 'A股' },
+  { symbol: '600028.SS', name: '中国石化', pinyin: 'ZGSH', exchange: '上交所', type: 'A股' },
+  { symbol: '002475.SZ', name: '立讯精密', pinyin: 'LXJM', exchange: '深交所', type: 'A股' },
+  { symbol: '000333.SZ', name: '美的集团', pinyin: 'MDJT', exchange: '深交所', type: 'A股' },
+  { symbol: '603288.SS', name: '海天味业', pinyin: 'HTWY', exchange: '上交所', type: 'A股' },
+  { symbol: '300124.SZ', name: '汇川技术', pinyin: 'HCJS', exchange: '深交所', type: 'A股' },
+  { symbol: '688111.SS', name: '金山办公', pinyin: 'JSBG', exchange: '上交所', type: '科创板' },
+  { symbol: '002415.SZ', name: '海康威视', pinyin: 'HKWS', exchange: '深交所', type: 'A股' },
+  { symbol: '601012.SS', name: '隆基绿能', pinyin: 'LJLN', exchange: '上交所', type: 'A股' },
+  { symbol: '600276.SS', name: '恒瑞医药', pinyin: 'HRYY', exchange: '上交所', type: 'A股' },
+  { symbol: '601888.SS', name: '中国中免', pinyin: 'ZGZM', exchange: '上交所', type: 'A股' },
+  { symbol: '300015.SZ', name: '爱尔眼科', pinyin: 'AEYK', exchange: '深交所', type: 'A股' },
+  { symbol: '000001.SS', name: '上证指数', pinyin: 'SZZS', exchange: '上交所', type: '指数' },
+  { symbol: '399001.SZ', name: '深证成指', pinyin: 'SZCZ', exchange: '深交所', type: '指数' },
+  { symbol: '399006.SZ', name: '创业板指', pinyin: 'CYBZ', exchange: '深交所', type: '指数' },
+  { symbol: '000688.SS', name: '科创50', pinyin: 'KC50', exchange: '上交所', type: '指数' },
+  { symbol: '000300.SS', name: '沪深300', pinyin: 'HS300', exchange: '上交所', type: '指数' },
+  { symbol: '0700.HK', name: '腾讯控股', pinyin: 'TXKG', exchange: '港交所', type: '港股' },
+  { symbol: '9988.HK', name: '阿里巴巴', pinyin: 'ELBB', exchange: '港交所', type: '港股' },
+  { symbol: '3690.HK', name: '美团', pinyin: 'MT', exchange: '港交所', type: '港股' },
+  { symbol: '1810.HK', name: '小米集团', pinyin: 'XMGB', exchange: '港交所', type: '港股' },
+  { symbol: 'AAPL', name: '苹果公司 (Apple)', pinyin: 'PGGS', exchange: 'NASDAQ', type: '美股' },
+  { symbol: 'TSLA', name: '特斯拉 (Tesla)', pinyin: 'TSL', exchange: 'NASDAQ', type: '美股' },
+  { symbol: 'NVDA', name: '英伟达 (NVIDIA)', pinyin: 'YWD', exchange: 'NASDAQ', type: '美股' }
 ];
+
+function normalizeSymbol(symbol) {
+  if (!symbol) return '';
+  const s = symbol.trim().toUpperCase();
+  if (/^\d{6}$/.test(s)) {
+    if (s.startsWith('60') || s.startsWith('68') || s.startsWith('90')) return s + '.SS';
+    if (s.startsWith('00') || s.startsWith('30') || s.startsWith('20') || s.startsWith('39')) return s + '.SZ';
+    if (s.startsWith('8') || s.startsWith('4') || s.startsWith('92')) return s + '.BJ';
+    return s + '.SS';
+  }
+  if (/^SH\d{6}$/i.test(s)) return s.substring(2) + '.SS';
+  if (/^SZ\d{6}$/i.test(s)) return s.substring(2) + '.SZ';
+  return s;
+}
+
+function getExchangeLabel(symbol) {
+  if (symbol.endsWith('.SS')) return '上交所';
+  if (symbol.endsWith('.SZ')) return '深交所';
+  if (symbol.endsWith('.BJ')) return '北交所';
+  if (symbol.endsWith('.HK')) return '港交所';
+  if (symbol.startsWith('^')) return '指数';
+  return '美股';
+}
+
+function getCurrencyLabel(symbol) {
+  if (symbol.endsWith('.SS') || symbol.endsWith('.SZ') || symbol.endsWith('.BJ')) return 'CNY';
+  if (symbol.endsWith('.HK')) return 'HKD';
+  if (symbol.startsWith('^')) return '点';
+  return 'USD';
+}
 
 function jsonRes(data, status = 200, maxAge = 15) {
   return new Response(JSON.stringify(data), {
@@ -52,6 +146,9 @@ function getBasePrice(symbol) {
   for (let i = 0; i < symbol.length; i++) {
     hash = (hash * 31 + symbol.charCodeAt(i)) & 0xffffffff;
   }
+  if (symbol.endsWith('.SS') || symbol.endsWith('.SZ')) {
+    return 15 + Math.abs(hash % 150) + Math.abs(hash % 99) / 100;
+  }
   return 80 + Math.abs(hash % 350) + Math.abs(hash % 99) / 100;
 }
 
@@ -66,18 +163,18 @@ function generateMockCandles(symbol, range, base) {
   else if (range === 'all') { count = 300; intervalMs = 7 * 24 * 60 * 60 * 1000; }
 
   const candles = [];
-  let cur = base * 0.9;
+  let cur = base * 0.95;
   const now = Date.now();
   const startTime = now - count * intervalMs;
 
   for (let i = 0; i < count; i++) {
     const time = startTime + i * intervalMs;
     const seed = Math.sin(time + cur) * 10000;
-    const changePct = ((seed - Math.floor(seed)) - 0.48) * 0.04;
+    const changePct = ((seed - Math.floor(seed)) - 0.48) * 0.035;
     const open = Math.round(cur * 100) / 100;
     const close = Math.round(open * (1 + changePct) * 100) / 100;
-    const high = Math.round(Math.max(open, close) * (1 + Math.abs(changePct) * 0.5) * 100) / 100;
-    const low = Math.round(Math.min(open, close) * (1 - Math.abs(changePct) * 0.5) * 100) / 100;
+    const high = Math.round(Math.max(open, close) * (1 + Math.abs(changePct) * 0.4) * 100) / 100;
+    const low = Math.round(Math.min(open, close) * (1 - Math.abs(changePct) * 0.4) * 100) / 100;
     const volume = Math.floor(500000 + Math.abs(seed % 3000000));
     candles.push({ timestamp: time, open, high, low, close, volume });
     cur = close;
@@ -86,19 +183,20 @@ function generateMockCandles(symbol, range, base) {
 }
 
 function fallbackQuote(symbol) {
-  const clean = symbol.trim().toUpperCase();
+  const clean = normalizeSymbol(symbol);
   const found = SEARCH_DICT.find(s => s.symbol.toUpperCase() === clean);
+  const zhName = A_SHARE_NAMES[clean] || (found ? found.name : clean);
   const base = getBasePrice(clean);
-  const change = Math.round((Math.sin(clean.length + Date.now() / 100000) * base * 0.02) * 100) / 100;
+  const change = Math.round((Math.sin(clean.length + Date.now() / 100000) * base * 0.015) * 100) / 100;
   const changePct = Math.round((change / base) * 10000) / 100;
   return {
     symbol: clean,
-    name: found ? found.name : clean + ' Equity',
+    name: zhName,
     price: Math.round((base + change) * 100) / 100,
     change,
     changePercent: changePct,
-    currency: clean.endsWith('.SS') || clean.endsWith('.SZ') ? 'CNY' : (clean.endsWith('.HK') ? 'HKD' : 'USD'),
-    exchange: found ? found.exchange : 'NYSE',
+    currency: getCurrencyLabel(clean),
+    exchange: getExchangeLabel(clean),
     open: base,
     high: Math.round((base + Math.abs(change) * 1.5) * 100) / 100,
     low: Math.round((base - Math.abs(change) * 1.5) * 100) / 100,
@@ -111,30 +209,33 @@ function fallbackQuote(symbol) {
 }
 
 async function fetchQuote(symbol) {
-  const clean = symbol.trim().toUpperCase();
+  const clean = normalizeSymbol(symbol);
   try {
     const url = 'https://query1.finance.yahoo.com/v8/finance/chart/' + encodeURIComponent(clean) + '?range=1d&interval=1m';
     const res = await fetch(url, { headers: { 'User-Agent': USER_AGENT, Accept: 'application/json' } });
     if (res.ok) {
       const data = await res.json();
-      const result = data?.chart?.result?.[0];
+      const result = data && data.chart && data.chart.result && data.chart.result[0];
       if (result) {
         const meta = result.meta;
-        const currentPrice = meta.regularMarketPrice ?? meta.chartPreviousClose ?? 0;
-        const prevClose = meta.chartPreviousClose ?? meta.previousClose ?? currentPrice;
+        const currentPrice = meta.regularMarketPrice !== undefined ? meta.regularMarketPrice : (meta.chartPreviousClose || 0);
+        const prevClose = meta.chartPreviousClose !== undefined ? meta.chartPreviousClose : (meta.previousClose || currentPrice);
         const change = Math.round((currentPrice - prevClose) * 100) / 100;
         const changePercent = prevClose !== 0 ? Math.round(((currentPrice - prevClose) / prevClose) * 10000) / 100 : 0;
+        const defaultName = meta.longName || meta.shortName || clean;
+        const displayName = A_SHARE_NAMES[clean] || defaultName;
+
         return {
           symbol: clean,
-          name: meta.longName || meta.shortName || clean,
-          price: currentPrice,
+          name: displayName,
+          price: Math.round(currentPrice * 100) / 100,
           change,
           changePercent,
-          currency: meta.currency || 'USD',
-          exchange: meta.exchangeName || 'Unknown',
-          open: meta.regularMarketOpen ?? currentPrice,
-          high: meta.regularMarketDayHigh ?? currentPrice,
-          low: meta.regularMarketDayLow ?? currentPrice,
+          currency: getCurrencyLabel(clean),
+          exchange: getExchangeLabel(clean),
+          open: meta.regularMarketOpen !== undefined ? meta.regularMarketOpen : currentPrice,
+          high: meta.regularMarketDayHigh !== undefined ? meta.regularMarketDayHigh : currentPrice,
+          low: meta.regularMarketDayLow !== undefined ? meta.regularMarketDayLow : currentPrice,
           previousClose: prevClose,
           volume: meta.regularMarketVolume || 0,
           fiftyTwoWeekHigh: meta.fiftyTwoWeekHigh,
@@ -150,7 +251,7 @@ async function fetchQuote(symbol) {
 }
 
 async function fetchHistory(symbol, range = '1mo', interval) {
-  const clean = symbol.trim().toUpperCase();
+  const clean = normalizeSymbol(symbol);
   let chosenInterval = interval;
   if (!chosenInterval) {
     if (range === '1d') chosenInterval = '5m';
@@ -166,17 +267,17 @@ async function fetchHistory(symbol, range = '1mo', interval) {
     const res = await fetch(url, { headers: { 'User-Agent': USER_AGENT, Accept: 'application/json' } });
     if (res.ok) {
       const data = await res.json();
-      const result = data?.chart?.result?.[0];
-      if (result && result.timestamp && result.indicators?.quote?.[0]) {
+      const result = data && data.chart && data.chart.result && data.chart.result[0];
+      if (result && result.timestamp && result.indicators && result.indicators.quote && result.indicators.quote[0]) {
         const timestamps = result.timestamp;
         const quote = result.indicators.quote[0];
         const candles = [];
         for (let i = 0; i < timestamps.length; i++) {
-          const o = quote.open?.[i];
-          const h = quote.high?.[i];
-          const l = quote.low?.[i];
-          const c = quote.close?.[i];
-          const v = quote.volume?.[i] ?? 0;
+          const o = quote.open && quote.open[i];
+          const h = quote.high && quote.high[i];
+          const l = quote.low && quote.low[i];
+          const c = quote.close && quote.close[i];
+          const v = (quote.volume && quote.volume[i]) || 0;
           if (o != null && h != null && l != null && c != null) {
             candles.push({
               timestamp: timestamps[i] * 1000,
@@ -224,30 +325,69 @@ async function fetchHistory(symbol, range = '1mo', interval) {
 }
 
 async function search(q) {
-  const query = q.trim().toLowerCase();
+  const query = q.trim().toUpperCase();
+  const queryLower = q.trim().toLowerCase();
+
+  // Search within dictionary first (symbol, Chinese name, or Pinyin initials)
+  const localMatches = SEARCH_DICT.filter(s =>
+    s.symbol.toUpperCase().includes(query) ||
+    s.name.includes(q.trim()) ||
+    s.pinyin.toUpperCase().includes(query)
+  );
+
+  // If query is 6 digits, also check if direct normalized symbol exists
+  if (/^\d{6}$/.test(query)) {
+    const norm = normalizeSymbol(query);
+    if (!localMatches.some(s => s.symbol === norm)) {
+      const zhName = A_SHARE_NAMES[norm] || norm;
+      localMatches.unshift({
+        symbol: norm,
+        name: zhName,
+        pinyin: '',
+        exchange: getExchangeLabel(norm),
+        type: 'A股'
+      });
+    }
+  }
+
+  if (localMatches.length > 0) {
+    return localMatches.map(m => ({
+      symbol: m.symbol,
+      name: m.name,
+      exchange: m.exchange,
+      type: m.type
+    }));
+  }
+
   try {
-    const url = 'https://query1.finance.yahoo.com/v1/finance/search?q=' + encodeURIComponent(query) + '&quotesCount=10&newsCount=0';
+    const url = 'https://query1.finance.yahoo.com/v1/finance/search?q=' + encodeURIComponent(queryLower) + '&quotesCount=10&newsCount=0';
     const res = await fetch(url, { headers: { 'User-Agent': USER_AGENT, Accept: 'application/json' } });
     if (res.ok) {
       const data = await res.json();
-      const quotes = data?.quotes || [];
+      const quotes = (data && data.quotes) || [];
       const results = quotes
         .filter(q => q.symbol && (q.quoteType === 'EQUITY' || q.quoteType === 'INDEX' || q.quoteType === 'ETF'))
-        .map(q => ({
-          symbol: q.symbol,
-          name: q.longname || q.shortname || q.symbol,
-          exchange: q.exchange || q.exchDisp || 'Unknown',
-          type: q.quoteType || 'Equity'
-        }));
+        .map(q => {
+          const norm = normalizeSymbol(q.symbol);
+          return {
+            symbol: norm,
+            name: A_SHARE_NAMES[norm] || q.longname || q.shortname || norm,
+            exchange: getExchangeLabel(norm),
+            type: q.quoteType || 'Equity'
+          };
+        });
       if (results.length > 0) return results;
     }
   } catch (e) {
     // fallback
   }
 
-  return SEARCH_DICT.filter(s =>
-    s.symbol.toLowerCase().includes(query) || s.name.toLowerCase().includes(query)
-  );
+  return SEARCH_DICT.slice(0, 10).map(m => ({
+    symbol: m.symbol,
+    name: m.name,
+    exchange: m.exchange,
+    type: m.type
+  }));
 }
 
 export default {
@@ -261,15 +401,15 @@ export default {
 
     if (path === '/' || path === '') {
       return jsonRes({
-        service: 'Stock Trading & Quotation API',
+        service: 'China A-Share Stock Quotation API',
         status: 'online',
-        version: '1.0.0',
+        version: '1.2.0',
         endpoints: {
           health: '/api/health',
-          quote: '/api/quote?symbol=AAPL',
-          quotes: '/api/quotes?symbols=AAPL,TSLA,NVDA',
-          history: '/api/history?symbol=AAPL&range=1mo&interval=1d',
-          search: '/api/search?q=Apple',
+          quote: '/api/quote?symbol=600519',
+          quotes: '/api/quotes?symbols=600519,300750,002594',
+          history: '/api/history?symbol=600519&range=1mo&interval=1d',
+          search: '/api/search?q=BYD',
           marketIndices: '/api/market/indices',
         },
         supportedRanges: ['1d', '5d', '1mo', '6mo', '1y', 'all'],
@@ -313,7 +453,20 @@ export default {
     }
 
     if (path === '/api/market/indices') {
-      return jsonRes(MARKET_INDICES, 200, 15);
+      try {
+        const indexSymbols = MARKET_INDICES.map(i => i.symbol);
+        const quotes = await Promise.all(indexSymbols.map(s => fetchQuote(s)));
+        const liveIndices = quotes.map((q, idx) => ({
+          symbol: q.symbol,
+          name: MARKET_INDICES[idx].name,
+          price: q.price,
+          change: q.change,
+          changePercent: q.changePercent
+        }));
+        return jsonRes(liveIndices, 200, 10);
+      } catch (e) {
+        return jsonRes(MARKET_INDICES, 200, 15);
+      }
     }
 
     return jsonRes({ error: 'Not Found' }, 404);

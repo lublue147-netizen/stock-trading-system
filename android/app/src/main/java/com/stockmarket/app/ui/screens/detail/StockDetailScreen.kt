@@ -106,8 +106,14 @@ fun StockDetailScreen(
                     verticalAlignment = Alignment.Bottom
                 ) {
                     Column {
+                        val currSign = when (quote.currency) {
+                            "CNY" -> "¥"
+                            "HKD" -> "HK$"
+                            "点" -> ""
+                            else -> "$"
+                        }
                         Text(
-                            text = "${quote.currency} ${String.format(Locale.US, "%.2f", quote.price)}",
+                            text = "$currSign${String.format(Locale.US, "%.2f", quote.price)}",
                             color = TextPrimary,
                             fontSize = 32.sp,
                             fontWeight = FontWeight.Bold

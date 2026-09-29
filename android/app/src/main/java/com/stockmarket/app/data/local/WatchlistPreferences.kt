@@ -16,7 +16,18 @@ class WatchlistPreferences(context: Context) {
         private const val KEY_COLOR_SCHEME = "key_color_scheme" // "CN" or "US"
         private const val KEY_AUTO_REFRESH = "key_auto_refresh_enabled"
 
-        val DEFAULT_SYMBOLS = setOf("AAPL", "TSLA", "NVDA", "MSFT", "0700.HK", "600519.SS")
+        val DEFAULT_SYMBOLS = setOf(
+            "600519.SS", // 贵州茅台
+            "300750.SZ", // 宁德时代
+            "002594.SZ", // 比亚迪
+            "601318.SS", // 中国平安
+            "600036.SS", // 招商银行
+            "300059.SZ", // 东方财富
+            "000001.SZ", // 平安银行
+            "000858.SZ", // 五粮液
+            "688981.SS", // 中芯国际
+            "0700.HK"    // 腾讯控股
+        )
     }
 
     private val _watchlistFlow = MutableStateFlow(getWatchlistSymbols())

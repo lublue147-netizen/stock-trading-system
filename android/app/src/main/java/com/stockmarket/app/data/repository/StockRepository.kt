@@ -200,36 +200,54 @@ class StockRepository(
         "NVDA" -> "NVIDIA Corporation"
         "MSFT" -> "Microsoft Corporation"
         "0700.HK" -> "腾讯控股 (Tencent)"
-        "600519.SS" -> "贵州茅台 (Moutai)"
-        "9988.HK" -> "阿里巴巴 (Alibaba)"
-        "300750.SZ" -> "宁德时代 (CATL)"
-        else -> "$symbol Corp"
+        "600519.SS" -> "贵州茅台"
+        "300750.SZ" -> "宁德时代"
+        "002594.SZ" -> "比亚迪"
+        "601318.SS" -> "中国平安"
+        "600036.SS" -> "招商银行"
+        "300059.SZ" -> "东方财富"
+        "000001.SZ" -> "平安银行"
+        "000858.SZ" -> "五粮液"
+        "688981.SS" -> "中芯国际"
+        "000001.SS" -> "上证指数"
+        "399001.SZ" -> "深证成指"
+        "399006.SZ" -> "创业板指"
+        "000688.SS" -> "科创50"
+        "000300.SS" -> "沪深300"
+        "0700.HK" -> "腾讯控股"
+        "9988.HK" -> "阿里巴巴"
+        "AAPL" -> "苹果公司"
+        "TSLA" -> "特斯拉"
+        "NVDA" -> "英伟达"
+        else -> "$symbol"
     }
 
     companion object {
         val FALLBACK_INDICES = listOf(
-            MarketIndex("^GSPC", "S&P 500", 5864.67, 24.34, 0.42),
-            MarketIndex("^IXIC", "NASDAQ", 18415.21, 115.80, 0.63),
-            MarketIndex("^DJI", "Dow Jones", 42863.86, -45.12, -0.11),
-            MarketIndex("000001.SS", "上证指数", 3326.46, 38.20, 1.16),
-            MarketIndex("399001.SZ", "深证成指", 10611.72, 184.60, 1.77),
-            MarketIndex("^HSI", "恒生指数", 20638.70, 254.30, 1.25)
+            MarketIndex("000001.SS", "上证指数", 3841.88, 18.26, 0.48),
+            MarketIndex("399001.SZ", "深证成指", 12939.70, 80.95, 0.63),
+            MarketIndex("399006.SZ", "创业板指", 3152.28, 12.46, 0.40),
+            MarketIndex("000688.SS", "科创50", 1575.43, 19.45, 1.25),
+            MarketIndex("000300.SS", "沪深300", 4357.12, 16.36, 0.38),
+            MarketIndex("^HSI", "恒生指数", 20590.15, 312.45, 1.54)
         )
 
         val FALLBACK_SEARCH = listOf(
-            SearchResult("AAPL", "Apple Inc.", "NASDAQ", "EQUITY"),
-            SearchResult("TSLA", "Tesla, Inc.", "NASDAQ", "EQUITY"),
-            SearchResult("NVDA", "NVIDIA Corporation", "NASDAQ", "EQUITY"),
-            SearchResult("MSFT", "Microsoft Corporation", "NASDAQ", "EQUITY"),
-            SearchResult("AMZN", "Amazon.com, Inc.", "NASDAQ", "EQUITY"),
-            SearchResult("GOOGL", "Alphabet Inc.", "NASDAQ", "EQUITY"),
-            SearchResult("META", "Meta Platforms, Inc.", "NASDAQ", "EQUITY"),
-            SearchResult("0700.HK", "腾讯控股 (Tencent Holdings)", "HKSE", "EQUITY"),
-            SearchResult("9988.HK", "阿里巴巴 (Alibaba Group)", "HKSE", "EQUITY"),
-            SearchResult("600519.SS", "贵州茅台 (Kweichow Moutai)", "SSE", "EQUITY"),
-            SearchResult("000858.SZ", "五粮液 (Wuliangye)", "SZSE", "EQUITY"),
-            SearchResult("300750.SZ", "宁德时代 (CATL)", "SZSE", "EQUITY"),
-            SearchResult("002594.SZ", "比亚迪 (BYD)", "SZSE", "EQUITY")
+            SearchResult("600519.SS", "贵州茅台", "上交所", "A股"),
+            SearchResult("300750.SZ", "宁德时代", "深交所", "A股"),
+            SearchResult("002594.SZ", "比亚迪", "深交所", "A股"),
+            SearchResult("300059.SZ", "东方财富", "深交所", "A股"),
+            SearchResult("688981.SS", "中芯国际", "上交所", "科创板"),
+            SearchResult("601318.SS", "中国平安", "上交所", "A股"),
+            SearchResult("600036.SS", "招商银行", "上交所", "A股"),
+            SearchResult("000858.SZ", "五粮液", "深交所", "A股"),
+            SearchResult("000001.SZ", "平安银行", "深交所", "A股"),
+            SearchResult("000001.SS", "上证指数", "上交所", "指数"),
+            SearchResult("399001.SZ", "深证成指", "深交所", "指数"),
+            SearchResult("399006.SZ", "创业板指", "深交所", "指数"),
+            SearchResult("0700.HK", "腾讯控股", "港交所", "港股"),
+            SearchResult("AAPL", "苹果公司 (Apple)", "NASDAQ", "美股"),
+            SearchResult("TSLA", "特斯拉 (Tesla)", "NASDAQ", "美股")
         )
     }
 }
