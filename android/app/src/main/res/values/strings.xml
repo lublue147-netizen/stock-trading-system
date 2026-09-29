@@ -1,0 +1,12 @@
+<resources>
+    <string name="app_name">StockVision 行情</string>
+    <string name="nav_watchlist">自选股</string>
+    <string name="nav_search">搜索</string>
+    <string name="nav_settings">设置</string>
+    <string name="search_hint">搜索股票代码/公司名称 (如 AAPL, 0700.HK, 茅台)...</string>
+    <string name="market_indices">大盘指数</string>
+    <string name="add_to_watchlist">加入自选</string>
+    <string name="remove_from_watchlist">移出自选</string>
+    <string name="server_url">行情服务地址 (Cloudflare Worker)</string>
+    <string name="save_settings">保存设置</string>
+</resources>

@@ -1,0 +1,11 @@
+<resources>
+    <color name="primary">#2563EB</color>
+    <color name="primary_variant">#1D4ED8</color>
+    <color name="secondary">#10B981</color>
+    <color name="background_dark">#0F172A</color>
+    <color name="surface_dark">#1E293B</color>
+    <color name="stock_up_cn">#EF4444</color>
+    <color name="stock_down_cn">#10B981</color>
+    <color name="stock_up_us">#10B981</color>
+    <color name="stock_down_us">#EF4444</color>
+</resources>

@@ -1,0 +1,29 @@
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <!-- Candle 1 -->
+    <path
+        android:fillColor="#10B981"
+        android:pathData="M30,36h4v10h-4z M31.5,30h1v6h-1z M31.5,46h1v8h-1z" />
+    <!-- Candle 2 -->
+    <path
+        android:fillColor="#EF4444"
+        android:pathData="M44,48h4v14h-4z M45.5,42h1v6h-1z M45.5,62h1v8h-1z" />
+    <!-- Candle 3 -->
+    <path
+        android:fillColor="#10B981"
+        android:pathData="M58,28h4v20h-4z M59.5,22h1v6h-1z M59.5,48h1v8h-1z" />
+    <!-- Candle 4 -->
+    <path
+        android:fillColor="#10B981"
+        android:pathData="M72,20h4v16h-4z M73.5,14h1v6h-1z M73.5,36h1v8h-1z" />
+    <!-- Trend line overlay -->
+    <path
+        android:strokeColor="#38BDF8"
+        android:strokeWidth="3"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round"
+        android:pathData="M24,70 L38,40 L52,56 L66,32 L84,18" />
+</vector>
