@@ -127,9 +127,11 @@ class StockRepository(
             if (clean.startsWith("BK")) "90.$clean" else "90.BK$clean"
         }
         val urls = listOf(
-            "https://push2.eastmoney.com/api/qt/ulist.np/get?secids=$secids&fields=f12,f14,f2,f3,f4,f5,f6,f7,f15,f16,f17,f18&fltt=2&invt=2",
             "https://29.push2.eastmoney.com/api/qt/ulist.np/get?secids=$secids&fields=f12,f14,f2,f3,f4,f5,f6,f7,f15,f16,f17,f18&fltt=2&invt=2",
-            "http://push2.eastmoney.com/api/qt/ulist.np/get?secids=$secids&fields=f12,f14,f2,f3,f4,f5,f6,f7,f15,f16,f17,f18&fltt=2&invt=2"
+            "https://79.push2.eastmoney.com/api/qt/ulist.np/get?secids=$secids&fields=f12,f14,f2,f3,f4,f5,f6,f7,f15,f16,f17,f18&fltt=2&invt=2",
+            "https://pushguest.eastmoney.com/api/qt/ulist.np/get?secids=$secids&fields=f12,f14,f2,f3,f4,f5,f6,f7,f15,f16,f17,f18&fltt=2&invt=2",
+            "http://29.push2.eastmoney.com/api/qt/ulist.np/get?secids=$secids&fields=f12,f14,f2,f3,f4,f5,f6,f7,f15,f16,f17,f18&fltt=2&invt=2",
+            "https://push2.eastmoney.com/api/qt/ulist.np/get?secids=$secids&fields=f12,f14,f2,f3,f4,f5,f6,f7,f15,f16,f17,f18&fltt=2&invt=2"
         )
         for (url in urls) {
             try {
@@ -341,7 +343,8 @@ class StockRepository(
     data class SectorDetailResult(
         val quote: StockQuote,
         val constituents: List<ThematicStockItem>,
-        val totalCount: Int
+        val totalCount: Int,
+        val diagnosticInfo: String? = null
     )
 
     suspend fun getSectorDetail(bkCode: String): Result<SectorDetailResult> = withContext(Dispatchers.IO) {
@@ -357,14 +360,14 @@ class StockRepository(
             null
         }
 
-        val (constituents, totalCount) = fetchEastMoneySectorConstituentsFull(clean, maxItems = 1500)
-        val finalConstituents = constituents
+        val fullResult = fetchEastMoneySectorConstituentsFull(clean, maxItems = 1500)
+        val finalConstituents = fullResult.items
         val enrichedConstituents = enrichConstituentsWithIndustry(
             items = finalConstituents,
             currentSectorBkCode = clean,
             sectorQuoteChange = rawQuote?.changePercent
         )
-        val finalTotal = if (totalCount > 0) maxOf(totalCount, enrichedConstituents.size) else enrichedConstituents.size
+        val finalTotal = if (fullResult.total > 0) maxOf(fullResult.total, enrichedConstituents.size) else enrichedConstituents.size
 
         val sectorName = rawQuote?.name?.takeIf { it.isNotEmpty() && it != clean } ?: getSectorName(clean)
         val hasValidRawQuote = rawQuote != null &&
@@ -418,7 +421,7 @@ class StockRepository(
             )
         }
 
-        val result = SectorDetailResult(quote, enrichedConstituents, finalTotal)
+        val result = SectorDetailResult(quote, enrichedConstituents, finalTotal, fullResult.diagnosticInfo)
         if (enrichedConstituents.isNotEmpty()) {
             sectorDetailCache[clean] = Pair(System.currentTimeMillis(), result)
         }
@@ -834,20 +837,29 @@ class StockRepository(
     private fun fetchDirectEastMoneyTrends(symbol: String): HistoricalData? {
         val clean = symbol.trim().uppercase()
         val secId = symbolToEastMoneySecId(clean)
-        val url = "https://push2.eastmoney.com/api/qt/stock/trends2/get?secid=$secId&fields1=f1,f2,f3,f4,f5,f6,f7,f8,f9,f10,f11,f12,f13&fields2=f51,f52,f53,f54,f55,f56,f57,f58"
-        val request = Request.Builder()
-            .url(url)
-            .header("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64)")
-            .header("Referer", "https://quote.eastmoney.com/")
-            .build()
+        val urls = listOf(
+            "https://29.push2.eastmoney.com/api/qt/stock/trends2/get?secid=$secId&fields1=f1,f2,f3,f4,f5,f6,f7,f8,f9,f10,f11,f12,f13&fields2=f51,f52,f53,f54,f55,f56,f57,f58",
+            "https://79.push2.eastmoney.com/api/qt/stock/trends2/get?secid=$secId&fields1=f1,f2,f3,f4,f5,f6,f7,f8,f9,f10,f11,f12,f13&fields2=f51,f52,f53,f54,f55,f56,f57,f58",
+            "https://push2.eastmoney.com/api/qt/stock/trends2/get?secid=$secId&fields1=f1,f2,f3,f4,f5,f6,f7,f8,f9,f10,f11,f12,f13&fields2=f51,f52,f53,f54,f55,f56,f57,f58"
+        )
+        for (url in urls) {
+            try {
+                val request = Request.Builder()
+                    .url(url)
+                    .header("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64)")
+                    .header("Referer", "https://quote.eastmoney.com/")
+                    .build()
 
-        val response = ApiClient.okHttpClient.newCall(request).execute()
-        if (!response.isSuccessful) return null
-        val bodyStr = response.body?.string() ?: return null
-        val rootObj = JSONObject(bodyStr)
-        val dataObj = rootObj.optJSONObject("data") ?: return null
-        val trendsArr = dataObj.optJSONArray("trends") ?: return null
-        if (trendsArr.length() == 0) return null
+                val response = ApiClient.fastOkHttpClient.newCall(request).execute()
+                if (!response.isSuccessful) {
+                    response.close()
+                    continue
+                }
+                val bodyStr = response.body?.string() ?: continue
+                val rootObj = try { JSONObject(bodyStr) } catch (_: Exception) { continue }
+                val dataObj = rootObj.optJSONObject("data") ?: continue
+                val trendsArr = dataObj.optJSONArray("trends") ?: continue
+                if (trendsArr.length() == 0) continue
 
         val preClose = dataObj.optDouble("preClose", 0.0)
         val sdfMinute = SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.getDefault()).apply {
@@ -884,21 +896,36 @@ class StockRepository(
             }
         }
 
-        return HistoricalData(
-            symbol = symbol,
-            range = "1d",
-            candles = candles,
-            meta = HistoryMeta(
-                previousClose = if (preClose > 0) preClose else null
-            )
-        )
+                return HistoricalData(
+                    symbol = symbol,
+                    range = "1d",
+                    candles = candles,
+                    meta = HistoryMeta(
+                        previousClose = if (preClose > 0) preClose else null
+                    )
+                )
+            } catch (_: Exception) {}
+        }
+        return null
     }
+
+    data class SectorConstituentsPageResult(
+        val items: List<ThematicStockItem>,
+        val total: Int,
+        val diagnosticInfo: String? = null
+    )
+
+    data class SectorConstituentsFullResult(
+        val items: List<ThematicStockItem>,
+        val total: Int,
+        val diagnosticInfo: String? = null
+    )
 
     private fun fetchEastMoneySectorConstituentsPage(
         bkCode: String,
         page: Int = 1,
         pageSize: Int = 100
-    ): Pair<List<ThematicStockItem>, Int> {
+    ): SectorConstituentsPageResult {
         val rawClean = bkCode.trim().uppercase()
         val resolvedCode = when {
             rawClean.startsWith("BK") -> rawClean
@@ -912,16 +939,26 @@ class StockRepository(
         val isIndustrySector = StockIndustryRegistry.isIndustrySector(clean)
         val defaultIndName = StockIndustryRegistry.getSectorName(clean)
 
-        // Standard EastMoney Quote Center filter for constituent stocks is strictly "b:$clean"
-        // (f:!50 is only for listing boards themselves, not constituent stocks).
         val candidateUrls = listOf(
-            "https://push2.eastmoney.com/api/qt/clist/get?pn=$page&pz=$pageSize&po=1&np=1&ut=bd1d9ddb04089700cf9c27f6f7426281&fltt=2&invt=2&fid=f3&fs=b:$clean&fields=f12,f14,f2,f3,f4,f5,f6,f7,f15,f16,f17,f18,f100",
+            // 1. Primary EastMoney / AKShare canonical endpoint with b:BK+f:!50
+            "https://29.push2.eastmoney.com/api/qt/clist/get?pn=$page&pz=$pageSize&po=1&np=1&ut=bd1d9ddb04089700cf9c27f6f7426281&fltt=2&invt=2&fid=f3&fs=b:$clean+f:!50&fields=f12,f14,f2,f3,f4,f5,f6,f7,f15,f16,f17,f18,f100",
+            // 2. Secondary: 29 node without f:!50
             "https://29.push2.eastmoney.com/api/qt/clist/get?pn=$page&pz=$pageSize&po=1&np=1&ut=bd1d9ddb04089700cf9c27f6f7426281&fltt=2&invt=2&fid=f3&fs=b:$clean&fields=f12,f14,f2,f3,f4,f5,f6,f7,f15,f16,f17,f18,f100",
-            "https://push2.eastmoney.com/api/qt/clist/get?pn=$page&pz=$pageSize&po=1&np=1&ut=fa5fd1943c7b386f172d6893dbfba10b&fltt=2&invt=2&fid=f3&fs=b:$clean&fields=f12,f14,f2,f3,f4,f5,f6,f7,f15,f16,f17,f18,f100",
-            "http://push2.eastmoney.com/api/qt/clist/get?pn=$page&pz=$pageSize&po=1&np=1&ut=bd1d9ddb04089700cf9c27f6f7426281&fltt=2&invt=2&fid=f3&fs=b:$clean&fields=f12,f14,f2,f3,f4,f5,f6,f7,f15,f16,f17,f18,f100"
+            // 3. Numbered node 79 (commonly used alternate in AKShare)
+            "https://79.push2.eastmoney.com/api/qt/clist/get?pn=$page&pz=$pageSize&po=1&np=1&ut=bd1d9ddb04089700cf9c27f6f7426281&fltt=2&invt=2&fid=f3&fs=b:$clean+f:!50&fields=f12,f14,f2,f3,f4,f5,f6,f7,f15,f16,f17,f18,f100",
+            // 4. Quote center guest gateway
+            "https://pushguest.eastmoney.com/api/qt/clist/get?pn=$page&pz=$pageSize&po=1&np=1&ut=fa5fd1943c7b386f172d6893dbfba10b&fltt=2&invt=2&fid=f3&fs=b:$clean+f:!50&fields=f12,f14,f2,f3,f4,f5,f6,f7,f15,f16,f17,f18,f100",
+            // 5. Plain HTTP fallback
+            "http://29.push2.eastmoney.com/api/qt/clist/get?pn=$page&pz=$pageSize&po=1&np=1&ut=bd1d9ddb04089700cf9c27f6f7426281&fltt=2&invt=2&fid=f3&fs=b:$clean+f:!50&fields=f12,f14,f2,f3,f4,f5,f6,f7,f15,f16,f17,f18,f100",
+            // 6. Numbered node 17
+            "https://17.push2.eastmoney.com/api/qt/clist/get?pn=$page&pz=$pageSize&po=1&np=1&ut=bd1d9ddb04089700cf9c27f6f7426281&fltt=2&invt=2&fid=f3&fs=b:$clean+f:!50&fields=f12,f14,f2,f3,f4,f5,f6,f7,f15,f16,f17,f18,f100",
+            // 7. Configured Backend / Cloudflare Worker fallback
+            "${preferences.getServerUrl().trimEnd('/')}/api/sector/constituents?bk=$clean&pn=$page&pz=$pageSize"
         )
 
+        val diagnosticAttempts = mutableListOf<String>()
         for (url in candidateUrls) {
+            val hostTag = try { java.net.URI(url).host ?: "url" } catch (_: Exception) { "host" }
             try {
                 val request = Request.Builder()
                     .url(url)
@@ -932,15 +969,23 @@ class StockRepository(
 
                 val response = ApiClient.fastOkHttpClient.newCall(request).execute()
                 if (!response.isSuccessful) {
+                    val code = response.code
                     response.close()
+                    diagnosticAttempts.add("$hostTag HTTP $code")
                     continue
                 }
-                val bodyStr = response.body?.string()?.trim()?.removePrefix("\uFEFF") ?: continue
-                if (bodyStr.isEmpty() || bodyStr.startsWith("<")) continue
-                val rootObj = try { JSONObject(bodyStr) } catch (_: Exception) { continue }
+                val bodyStr = response.body?.string()?.trim()?.removePrefix("\uFEFF") ?: ""
+                if (bodyStr.isEmpty() || bodyStr.startsWith("<")) {
+                    diagnosticAttempts.add("$hostTag 格式异常(${bodyStr.take(15)})")
+                    continue
+                }
+                val rootObj = try { JSONObject(bodyStr) } catch (je: Exception) {
+                    diagnosticAttempts.add("$hostTag JSON解析异常")
+                    continue
+                }
                 val dataObj = rootObj.optJSONObject("data")
                 if (dataObj == null) {
-                    android.util.Log.w("SectorFetch", "[$clean] data is null from $url")
+                    diagnosticAttempts.add("$hostTag data为null")
                     continue
                 }
                 val total = dataObj.optInt("total", 0)
@@ -963,6 +1008,7 @@ class StockRepository(
                 }
 
                 if (jsonObjects.isEmpty()) {
+                    diagnosticAttempts.add("$hostTag diff为空(total=$total)")
                     continue
                 }
 
@@ -1035,29 +1081,35 @@ class StockRepository(
                 }
 
                 if (items.isNotEmpty()) {
-                    android.util.Log.d("SectorFetch", "[$clean] p=$page SUCCESS via $url: ${items.size} items, total=$total")
-                    return Pair(items, total)
+                    android.util.Log.d("SectorFetch", "[$clean] p=$page SUCCESS via $hostTag: ${items.size} items, total=$total")
+                    return SectorConstituentsPageResult(items, total, null)
                 }
             } catch (e: Exception) {
+                val errName = e.javaClass.simpleName
+                diagnosticAttempts.add("$hostTag $errName: ${e.message ?: "error"}")
                 android.util.Log.w("SectorFetch", "[$clean] attempt failed ($url): ${e.message}")
             }
         }
-        return Pair(emptyList(), 0)
+        val diagInfo = diagnosticAttempts.joinToString("; ")
+        android.util.Log.w("SectorFetch", "[$clean] all candidates failed: $diagInfo")
+        return SectorConstituentsPageResult(emptyList(), 0, diagInfo)
     }
 
     private fun fetchEastMoneySectorConstituents(bkCode: String, limit: Int = 15): List<ThematicStockItem> {
-        return fetchEastMoneySectorConstituentsPage(bkCode, page = 1, pageSize = limit).first
+        return fetchEastMoneySectorConstituentsPage(bkCode, page = 1, pageSize = limit).items
     }
 
-    private fun fetchEastMoneySectorConstituentsFull(bkCode: String, maxItems: Int = 2000): Pair<List<ThematicStockItem>, Int> {
+    private fun fetchEastMoneySectorConstituentsFull(bkCode: String, maxItems: Int = 2000): SectorConstituentsFullResult {
         val clean = bkCode.trim().uppercase()
         val allItems = mutableListOf<ThematicStockItem>()
         val seenSymbols = HashSet<String>()
         var reportedTotal = 0
 
         // Page 1 — canonical Eastmoney pageSize = 100
-        val (page1Items, total) = fetchEastMoneySectorConstituentsPage(clean, page = 1, pageSize = 100)
-        android.util.Log.d("SectorPagination", "[$clean] page1: ${page1Items.size} items, total=$total")
+        val page1Result = fetchEastMoneySectorConstituentsPage(clean, page = 1, pageSize = 100)
+        val page1Items = page1Result.items
+        val total = page1Result.total
+        android.util.Log.d("SectorPagination", "[$clean] page1: ${page1Items.size} items, total=$total, diag=${page1Result.diagnosticInfo}")
         for (item in page1Items) {
             if (seenSymbols.add(item.symbol)) {
                 allItems.add(item)
@@ -1065,13 +1117,18 @@ class StockRepository(
         }
         reportedTotal = total
 
+        if (allItems.isEmpty()) {
+            return SectorConstituentsFullResult(emptyList(), 0, page1Result.diagnosticInfo)
+        }
+
         // If total reported is greater than 100 or page 1 was full (100 items), fetch remaining pages
         val targetCount = if (reportedTotal > 0) reportedTotal else if (page1Items.size == 100) maxItems else page1Items.size
         if (targetCount > 100 && page1Items.isNotEmpty()) {
             val totalPages = minOf((targetCount + 99) / 100, (maxItems + 99) / 100)
             android.util.Log.d("SectorPagination", "[$clean] needs $totalPages pages (target=$targetCount)")
             for (p in 2..totalPages) {
-                val (pageItems, _) = fetchEastMoneySectorConstituentsPage(clean, page = p, pageSize = 100)
+                val pageResult = fetchEastMoneySectorConstituentsPage(clean, page = p, pageSize = 100)
+                val pageItems = pageResult.items
                 android.util.Log.d("SectorPagination", "[$clean] page$p: ${pageItems.size} items")
                 if (pageItems.isEmpty()) break
                 for (item in pageItems) {
@@ -1085,7 +1142,7 @@ class StockRepository(
 
         android.util.Log.d("SectorPagination", "[$clean] final: ${allItems.size} total items")
         val finalTotal = if (reportedTotal > 0) maxOf(reportedTotal, allItems.size) else allItems.size
-        return Pair(allItems, finalTotal)
+        return SectorConstituentsFullResult(allItems, finalTotal, null)
     }
 
     // --- Direct Tencent & Sina Feed Implementations ---

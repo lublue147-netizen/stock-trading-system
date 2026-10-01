@@ -117,7 +117,11 @@ class SectorDetailViewModel(
                                         constituents = detail.constituents,
                                         totalConstituents = detail.totalCount,
                                         isWatchlisted = repository.isWatchlisted(bkCode),
-                                        errorMessage = if (detail.constituents.isEmpty()) "未获取到该板块成分股数据，请下拉刷新" else null
+                                        errorMessage = if (detail.constituents.isEmpty()) {
+                                            val diag = detail.diagnosticInfo
+                                            if (!diag.isNullOrBlank()) "未获取到成份股数据 [$diag]，请下拉刷新"
+                                            else "未获取到该板块成份股数据，请下拉刷新"
+                                        } else null
                                     )
                                 }
                             } else {

@@ -25,9 +25,8 @@ object ApiClient {
         .build()
 
     val fastOkHttpClient = okHttpClient.newBuilder()
-        .connectTimeout(4, TimeUnit.SECONDS)
-        .readTimeout(6, TimeUnit.SECONDS)
-        .callTimeout(8, TimeUnit.SECONDS)
+        .connectTimeout(5, TimeUnit.SECONDS)
+        .readTimeout(10, TimeUnit.SECONDS)
         .build()
 
     private var currentBaseUrl: String = DEFAULT_BASE_URL
