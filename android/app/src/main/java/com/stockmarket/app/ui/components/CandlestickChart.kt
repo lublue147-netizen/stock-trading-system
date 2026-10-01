@@ -352,6 +352,7 @@ fun CandlestickChart(
                 val candleCount = candles.size
                 val candleWidth = width / candleCount
                 val barWidth = max(2f, candleWidth * 0.72f)
+                val maxVolume = max(1L, candles.maxOf { it.volume }).toFloat()
                 val auctionX = if (chartType == ChartType.LINE && auctionIndex != null) (auctionIndex * candleWidth) else null
 
                 // Draw Background Grid

@@ -533,7 +533,7 @@ class StockRepository(
                     chgPct >= 0.0 -> "红盘趋势"
                     else -> "高位蓄势"
                 }
-                val subDetail = "东财$bkCode成分股"
+                val subDetail = "东财${bkCode}成分股"
 
                 items.add(
                     ThematicStockItem(
