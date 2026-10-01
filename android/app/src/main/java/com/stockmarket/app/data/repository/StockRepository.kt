@@ -902,25 +902,27 @@ class StockRepository(
         val isIndustrySector = StockIndustryRegistry.isIndustrySector(clean)
         val defaultIndName = StockIndustryRegistry.getSectorName(clean)
 
-        // Multiple fallback strategies:
-        // 1. fs: Eastmoney quote center uses "b:BK1638+f:!50", but some sectors use "b:BK1638"
-        val fsCandidates = listOf("b:$clean+f:!50", "b:$clean")
-        // 2. ut: Eastmoney web quote center token vs mobile app token
+        // For industry sectors, b:$clean is standard and proven.
+        // For concept / thematic sectors (like BK1638), Eastmoney QuoteCenter uses b:$clean+f:!50.
+        val fsCandidates = if (isIndustrySector) {
+            listOf("b:$clean", "b:$clean+f:!50")
+        } else {
+            listOf("b:$clean+f:!50", "b:$clean")
+        }
+
         val utTokens = listOf(
-            "fa5fd1943c7b386f172d6893dbfba10b",
-            "bd1d9ddb04089700cf9c27f6f7426281"
+            "bd1d9ddb04089700cf9c27f6f7426281",
+            "fa5fd1943c7b386f172d6893dbfba10b"
         )
-        // 3. hosts: Primary load balancer and node fallbacks
         val hosts = listOf(
             "push2.eastmoney.com",
-            "29.push2.eastmoney.com",
-            "pushguest.eastmoney.com"
+            "29.push2.eastmoney.com"
         )
 
         for (host in hosts) {
             for (ut in utTokens) {
                 for (fsParam in fsCandidates) {
-                    val url = "https://$host/api/qt/clist/get?pn=$page&pz=$pageSize&po=1&np=1&ut=$ut&fltt=2&invt=2&fid=f3&fs=$fsParam&fields=f12,f14,f2,f3,f4,f5,f6,f7,f15,f16,f17,f18,f100&dect=1&wbp2u=|0|0|0|web"
+                    val url = "https://$host/api/qt/clist/get?pn=$page&pz=$pageSize&po=1&np=1&ut=$ut&fltt=2&invt=2&fid=f3&fs=$fsParam&fields=f12,f14,f2,f3,f4,f5,f6,f7,f15,f16,f17,f18,f100"
                     try {
                         val request = Request.Builder()
                             .url(url)
