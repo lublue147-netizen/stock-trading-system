@@ -28,6 +28,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
+import com.stockmarket.app.data.model.CandlePoint
 import com.stockmarket.app.data.model.OrderBookEntry
 import com.stockmarket.app.data.model.StockQuote
 import com.stockmarket.app.data.model.TickTransaction
@@ -58,6 +59,7 @@ fun StockDetailScreen(
     var showTradeDialog by remember { mutableStateOf(false) }
     var showAlertDialog by remember { mutableStateOf(false) }
     var showDiagnosisDialog by remember { mutableStateOf(false) }
+    var showDatePickerDialog by remember { mutableStateOf(false) }
 
     // Market trading status string (A-Share CST: 09:30-11:30, 13:00-15:00)
     val marketStatus = remember {
@@ -461,6 +463,22 @@ fun StockDetailScreen(
                 onRangeSelected = { viewModel.loadHistory(it) }
             )
 
+            // When in 1d intraday mode, show East Money Historical Date Navigation Bar
+            if (state.selectedRange == "1d") {
+                Spacer(modifier = Modifier.height(8.dp))
+                HistoricalIntradayDateBar(
+                    selectedDate = state.selectedIntradayDate,
+                    availableDates = state.availableIntradayDates,
+                    isHistorical = state.isHistoricalIntraday,
+                    historicalPrevClose = state.historicalPreviousClose,
+                    candles = state.historicalData?.candles ?: emptyList(),
+                    onPreviousDay = { viewModel.stepDate(-1) },
+                    onNextDay = { viewModel.stepDate(1) },
+                    onSelectDateClick = { showDatePickerDialog = true },
+                    onResetToday = { viewModel.resetToToday() }
+                )
+            }
+
             Spacer(modifier = Modifier.height(8.dp))
 
             // Chart Indicator Sub-bar (K-Line vs Intraday, MA Toggle)
@@ -538,10 +556,15 @@ fun StockDetailScreen(
                     CircularProgressIndicator(color = EastMoneyRed)
                 }
             } else {
+                val effectivePreviousClose = if (state.selectedRange == "1d" && state.isHistoricalIntraday && state.historicalPreviousClose != null) {
+                    state.historicalPreviousClose
+                } else {
+                    quote?.previousClose
+                }
                 CandlestickChart(
                     candles = state.historicalData?.candles ?: emptyList(),
                     chartType = state.chartType,
-                    previousClose = quote?.previousClose,
+                    previousClose = effectivePreviousClose,
                     showMA = state.showMA
                 )
             }
@@ -632,6 +655,19 @@ fun StockDetailScreen(
             quote = quote,
             stockColors = stockColors,
             onDismiss = { showDiagnosisDialog = false }
+        )
+    }
+
+    // Modal Dialog 4: 历史分时交易日选择器
+    if (showDatePickerDialog) {
+        HistoricalDatePickerDialog(
+            availableDates = state.availableIntradayDates,
+            selectedDate = state.selectedIntradayDate,
+            onDateSelected = { date ->
+                viewModel.selectHistoricalDate(date)
+                showDatePickerDialog = false
+            },
+            onDismiss = { showDatePickerDialog = false }
         )
     }
 }
@@ -1618,5 +1654,359 @@ private fun DiagnosisItem(title: String, desc: String) {
         }
         Spacer(modifier = Modifier.width(6.dp))
         Text(desc, color = TextSecondary, fontSize = 11.sp, lineHeight = 16.sp)
+    }
+}
+
+private fun formatDisplayDateWithWeekday(dateStr: String): String {
+    return try {
+        val sdf = SimpleDateFormat("yyyy-MM-dd", Locale.getDefault())
+        val date = sdf.parse(dateStr) ?: return dateStr
+        val cal = Calendar.getInstance().apply { time = date }
+        val weekDay = when (cal.get(Calendar.DAY_OF_WEEK)) {
+            Calendar.MONDAY -> "周一"
+            Calendar.TUESDAY -> "周二"
+            Calendar.WEDNESDAY -> "周三"
+            Calendar.THURSDAY -> "周四"
+            Calendar.FRIDAY -> "周五"
+            Calendar.SATURDAY -> "周六"
+            Calendar.SUNDAY -> "周日"
+            else -> ""
+        }
+        if (weekDay.isNotEmpty()) "$dateStr ($weekDay)" else dateStr
+    } catch (_: Exception) {
+        dateStr
+    }
+}
+
+@Composable
+private fun HistoricalIntradayDateBar(
+    selectedDate: String?,
+    availableDates: List<String>,
+    isHistorical: Boolean,
+    historicalPrevClose: Double?,
+    candles: List<CandlePoint>,
+    onPreviousDay: () -> Unit,
+    onNextDay: () -> Unit,
+    onSelectDateClick: () -> Unit,
+    onResetToday: () -> Unit
+) {
+    val stockColors = LocalStockColors.current
+    val currentDate = selectedDate ?: availableDates.lastOrNull() ?: "今日"
+    val currentIndex = if (selectedDate != null) availableDates.indexOf(selectedDate) else availableDates.lastIndex
+    val canGoPrev = availableDates.size > 1 && currentIndex > 0
+    val canGoNext = availableDates.size > 1 && currentIndex in 0 until (availableDates.size - 1)
+
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(8.dp))
+            .background(EastMoneySurface)
+            .border(1.dp, if (isHistorical) EastMoneyOrange.copy(alpha = 0.5f) else EastMoneyBorder, RoundedCornerShape(8.dp))
+            .padding(horizontal = 8.dp, vertical = 6.dp)
+    ) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            // Previous Day Button
+            Row(
+                modifier = Modifier
+                    .clip(RoundedCornerShape(6.dp))
+                    .background(if (canGoPrev) Color(0xFF1E2433) else Color.Transparent)
+                    .clickable(enabled = canGoPrev) { onPreviousDay() }
+                    .padding(horizontal = 8.dp, vertical = 4.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Icon(
+                    imageVector = Icons.Filled.KeyboardArrowLeft,
+                    contentDescription = "前一交易日",
+                    tint = if (canGoPrev) TextSecondary else TextMuted.copy(alpha = 0.3f),
+                    modifier = Modifier.size(16.dp)
+                )
+                Spacer(modifier = Modifier.width(2.dp))
+                Text(
+                    text = "前一日",
+                    fontSize = 11.sp,
+                    color = if (canGoPrev) TextSecondary else TextMuted.copy(alpha = 0.3f)
+                )
+            }
+
+            // Center Date Selector Pill Button
+            Row(
+                modifier = Modifier
+                    .clip(RoundedCornerShape(6.dp))
+                    .background(if (isHistorical) EastMoneyOrange.copy(alpha = 0.15f) else Color(0xFF222838))
+                    .border(
+                        1.dp,
+                        if (isHistorical) EastMoneyOrange.copy(alpha = 0.6f) else EastMoneyBorder,
+                        RoundedCornerShape(6.dp)
+                    )
+                    .clickable { onSelectDateClick() }
+                    .padding(horizontal = 10.dp, vertical = 4.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Icon(
+                    imageVector = Icons.Filled.DateRange,
+                    contentDescription = null,
+                    tint = if (isHistorical) EastMoneyOrange else EastMoneyYellow,
+                    modifier = Modifier.size(14.dp)
+                )
+                Spacer(modifier = Modifier.width(5.dp))
+                Text(
+                    text = formatDisplayDateWithWeekday(currentDate),
+                    fontSize = 11.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    color = if (isHistorical) EastMoneyOrange else TextPrimary
+                )
+                Spacer(modifier = Modifier.width(4.dp))
+                Icon(
+                    imageVector = Icons.Filled.KeyboardArrowDown,
+                    contentDescription = null,
+                    tint = if (isHistorical) EastMoneyOrange else TextMuted,
+                    modifier = Modifier.size(14.dp)
+                )
+            }
+
+            // Right Group: Next Day Button & Return to Today Button
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Row(
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(6.dp))
+                        .background(if (canGoNext) Color(0xFF1E2433) else Color.Transparent)
+                        .clickable(enabled = canGoNext) { onNextDay() }
+                        .padding(horizontal = 8.dp, vertical = 4.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        text = "后一日",
+                        fontSize = 11.sp,
+                        color = if (canGoNext) TextSecondary else TextMuted.copy(alpha = 0.3f)
+                    )
+                    Spacer(modifier = Modifier.width(2.dp))
+                    Icon(
+                        imageVector = Icons.Filled.KeyboardArrowRight,
+                        contentDescription = "后一交易日",
+                        tint = if (canGoNext) TextSecondary else TextMuted.copy(alpha = 0.3f),
+                        modifier = Modifier.size(16.dp)
+                    )
+                }
+
+                if (isHistorical) {
+                    Spacer(modifier = Modifier.width(6.dp))
+                    Box(
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(6.dp))
+                            .background(EastMoneyRed.copy(alpha = 0.15f))
+                            .border(1.dp, EastMoneyRed.copy(alpha = 0.5f), RoundedCornerShape(6.dp))
+                            .clickable { onResetToday() }
+                            .padding(horizontal = 6.dp, vertical = 4.dp)
+                    ) {
+                        Text(
+                            text = "返回今日",
+                            fontSize = 10.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = EastMoneyRed
+                        )
+                    }
+                }
+            }
+        }
+
+        // Historical Day Summary Row (when reviewing past date)
+        if (isHistorical && candles.isNotEmpty()) {
+            val lastClose = candles.last().close
+            val refClose = historicalPrevClose ?: candles.first().open
+            val delta = lastClose - refClose
+            val deltaPct = if (refClose > 0) (delta / refClose) * 100 else 0.0
+            val isUp = delta >= 0
+            val color = if (isUp) stockColors.upColor else stockColors.downColor
+            val sign = if (isUp) "+" else ""
+            val high = candles.maxOfOrNull { it.high } ?: lastClose
+            val low = candles.minOfOrNull { it.low } ?: lastClose
+
+            Spacer(modifier = Modifier.height(4.dp))
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(4.dp))
+                    .background(Color(0xFF0F1420))
+                    .padding(horizontal = 6.dp, vertical = 3.dp),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    text = "【历史分时】昨收: ${String.format(Locale.US, "%.2f", refClose)}",
+                    color = TextSecondary,
+                    fontSize = 10.sp
+                )
+                Text(
+                    text = "收盘: ${String.format(Locale.US, "%.2f", lastClose)} ($sign${String.format(Locale.US, "%.2f%%", deltaPct)})",
+                    color = color,
+                    fontSize = 10.sp,
+                    fontWeight = FontWeight.Bold
+                )
+                Text(
+                    text = "高: ${String.format(Locale.US, "%.2f", high)} 低: ${String.format(Locale.US, "%.2f", low)}",
+                    color = TextMuted,
+                    fontSize = 10.sp
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun HistoricalDatePickerDialog(
+    availableDates: List<String>,
+    selectedDate: String?,
+    onDateSelected: (String) -> Unit,
+    onDismiss: () -> Unit
+) {
+    val latestDate = availableDates.lastOrNull()
+    val activeDate = selectedDate ?: latestDate
+
+    Dialog(onDismissRequest = onDismiss) {
+        Surface(
+            shape = RoundedCornerShape(14.dp),
+            color = EastMoneySurface,
+            border = androidx.compose.foundation.BorderStroke(1.dp, EastMoneyBorder),
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(16.dp)
+        ) {
+            Column(
+                modifier = Modifier.padding(16.dp)
+            ) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Column {
+                        Text(
+                            text = "选择分时交易日",
+                            fontSize = 17.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = TextPrimary
+                        )
+                        Text(
+                            text = "支持回放近30个交易日完整5分钟分时走势",
+                            fontSize = 11.sp,
+                            color = TextMuted
+                        )
+                    }
+                    IconButton(onClick = onDismiss, modifier = Modifier.size(28.dp)) {
+                        Icon(
+                            imageVector = Icons.Filled.Close,
+                            contentDescription = "关闭",
+                            tint = TextMuted,
+                            modifier = Modifier.size(18.dp)
+                        )
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(12.dp))
+
+                if (availableDates.isEmpty()) {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(120.dp),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Text("暂无可用历史交易日", color = TextMuted, fontSize = 13.sp)
+                    }
+                } else {
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .heightIn(max = 380.dp)
+                            .verticalScroll(rememberScrollState())
+                    ) {
+                        // Reverse so latest dates appear at top
+                        availableDates.reversed().forEach { dateStr ->
+                            val isSelected = dateStr == activeDate
+                            val isLatest = dateStr == latestDate
+
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(vertical = 4.dp)
+                                    .clip(RoundedCornerShape(8.dp))
+                                    .background(if (isSelected) Color(0xFF222B42) else Color(0xFF141926))
+                                    .border(
+                                        1.dp,
+                                        if (isSelected) EastMoneyOrange else Color.Transparent,
+                                        RoundedCornerShape(8.dp)
+                                    )
+                                    .clickable { onDateSelected(dateStr) }
+                                    .padding(horizontal = 12.dp, vertical = 10.dp),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    Icon(
+                                        imageVector = Icons.Filled.DateRange,
+                                        contentDescription = null,
+                                        tint = if (isSelected) EastMoneyOrange else TextSecondary,
+                                        modifier = Modifier.size(16.dp)
+                                    )
+                                    Spacer(modifier = Modifier.width(8.dp))
+                                    Text(
+                                        text = formatDisplayDateWithWeekday(dateStr),
+                                        fontSize = 13.sp,
+                                        fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal,
+                                        color = if (isSelected) EastMoneyOrange else TextPrimary
+                                    )
+                                    if (isLatest) {
+                                        Spacer(modifier = Modifier.width(6.dp))
+                                        Box(
+                                            modifier = Modifier
+                                                .clip(RoundedCornerShape(4.dp))
+                                                .background(EastMoneyRed.copy(alpha = 0.2f))
+                                                .padding(horizontal = 5.dp, vertical = 1.dp)
+                                        ) {
+                                            Text(
+                                                text = "今日/最新",
+                                                color = EastMoneyRed,
+                                                fontSize = 9.sp,
+                                                fontWeight = FontWeight.Bold
+                                            )
+                                        }
+                                    }
+                                }
+
+                                if (isSelected) {
+                                    Icon(
+                                        imageVector = Icons.Filled.Check,
+                                        contentDescription = "已选中",
+                                        tint = EastMoneyOrange,
+                                        modifier = Modifier.size(18.dp)
+                                    )
+                                } else {
+                                    Text(
+                                        text = "查看分时",
+                                        fontSize = 11.sp,
+                                        color = TextSecondary
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(12.dp))
+
+                Button(
+                    onClick = onDismiss,
+                    modifier = Modifier.fillMaxWidth(),
+                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF263045)),
+                    shape = RoundedCornerShape(8.dp)
+                ) {
+                    Text("关闭", color = TextPrimary, fontSize = 13.sp)
+                }
+            }
+        }
     }
 }

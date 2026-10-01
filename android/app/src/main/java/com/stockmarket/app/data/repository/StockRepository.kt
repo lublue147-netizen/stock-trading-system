@@ -20,6 +20,8 @@ import kotlin.math.sin
 class StockRepository(
     private val preferences: WatchlistPreferences
 ) {
+    private val intradayBarsCache = java.util.concurrent.ConcurrentHashMap<String, Pair<Long, Map<String, List<CandlePoint>>>>()
+
     private fun getService() = ApiClient.getService(preferences.getServerUrl())
 
     suspend fun getWatchlistQuotes(): Result<List<StockQuote>> = withContext(Dispatchers.IO) {
@@ -81,10 +83,10 @@ class StockRepository(
         Result.success(createFallbackQuote(symbol))
     }
 
-    suspend fun getHistoricalData(symbol: String, range: String): Result<HistoricalData> = withContext(Dispatchers.IO) {
+    suspend fun getHistoricalData(symbol: String, range: String, date: String? = null): Result<HistoricalData> = withContext(Dispatchers.IO) {
         // 1. Primary Engine: Direct Sina Finance KLine & 5-min Intraday API
         try {
-            fetchDirectSinaHistory(symbol, range)?.let { data ->
+            fetchDirectSinaHistory(symbol, range, date)?.let { data ->
                 if (data.candles.isNotEmpty()) {
                     return@withContext Result.success(data)
                 }
@@ -95,7 +97,7 @@ class StockRepository(
 
         // 2. Secondary Engine: Configured Cloudflare Worker API
         try {
-            val data = getService().getHistory(symbol = symbol, range = range)
+            val data = getService().getHistory(symbol = symbol, range = range, date = date)
             if (data.candles.isNotEmpty()) {
                 return@withContext Result.success(data)
             }
@@ -358,11 +360,90 @@ class StockRepository(
         return list
     }
 
-    private fun fetchDirectSinaHistory(symbol: String, range: String): HistoricalData? {
+    private fun fetchDirectSinaHistory(symbol: String, range: String, date: String? = null): HistoricalData? {
         val clean = symbol.trim().uppercase()
         val tCode = symbolToTencentCode(clean)
+
+        if (range == "1d") {
+            // Check in-memory cache first (valid for 60 seconds)
+            val now = System.currentTimeMillis()
+            val cached = intradayBarsCache[clean]
+            val byDate: Map<String, List<CandlePoint>> = if (cached != null && (now - cached.first) < 60_000L) {
+                cached.second
+            } else {
+                val url = "https://quotes.sina.cn/cn/api/json_v2.php/CN_MarketDataService.getKLineData?symbol=$tCode&scale=5&ma=no&datalen=1440"
+                val request = Request.Builder()
+                    .url(url)
+                    .header("User-Agent", "Mozilla/5.0")
+                    .build()
+
+                val response = ApiClient.okHttpClient.newCall(request).execute()
+                if (!response.isSuccessful) return null
+                val bodyStr = response.body?.string() ?: return null
+                val jsonArr = JSONArray(bodyStr)
+                if (jsonArr.length() == 0) return null
+
+                val sdfFull = SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault())
+                val map = LinkedHashMap<String, MutableList<CandlePoint>>()
+
+                for (i in 0 until jsonArr.length()) {
+                    val item = jsonArr.getJSONObject(i)
+                    val dayStr = item.optString("day", "")
+                    if (dayStr.isEmpty()) continue
+                    val dateKey = dayStr.substringBefore(" ")
+                    val ts = try {
+                        sdfFull.parse(dayStr)?.time ?: System.currentTimeMillis()
+                    } catch (_: Exception) {
+                        System.currentTimeMillis()
+                    }
+                    val candle = CandlePoint(
+                        timestamp = ts,
+                        open = item.optDouble("open", 0.0),
+                        high = item.optDouble("high", 0.0),
+                        low = item.optDouble("low", 0.0),
+                        close = item.optDouble("close", 0.0),
+                        volume = item.optDouble("volume", 0.0).toLong()
+                    )
+                    map.getOrPut(dateKey) { mutableListOf() }.add(candle)
+                }
+
+                intradayBarsCache[clean] = Pair(now, map)
+                map
+            }
+
+            val sortedDates = byDate.keys.sorted()
+            if (sortedDates.isEmpty()) return null
+
+            val targetDate = if (date != null && byDate.containsKey(date)) date else sortedDates.last()
+            val targetIdx = sortedDates.indexOf(targetDate)
+            val prevDate = if (targetIdx > 0) sortedDates[targetIdx - 1] else null
+            val prevClose = if (prevDate != null) {
+                byDate[prevDate]?.lastOrNull()?.close ?: byDate[targetDate]?.firstOrNull()?.open ?: 0.0
+            } else {
+                byDate[targetDate]?.firstOrNull()?.open ?: 0.0
+            }
+
+            val dayCandles = byDate[targetDate] ?: emptyList()
+            val highs = dayCandles.map { it.high }
+            val lows = dayCandles.map { it.low }
+
+            return HistoricalData(
+                symbol = clean,
+                range = "1d",
+                interval = "5m",
+                candles = dayCandles,
+                meta = HistoryMeta(
+                    currency = "CNY",
+                    previousClose = prevClose,
+                    high = highs.maxOrNull() ?: 0.0,
+                    low = lows.minOrNull() ?: 0.0,
+                    selectedDate = targetDate,
+                    availableDates = sortedDates
+                )
+            )
+        }
+
         val (scale, datalen) = when (range) {
-            "1d" -> Pair(5, 48)
             "5d" -> Pair(15, 80)
             "1mo" -> Pair(240, 30)
             "6mo" -> Pair(240, 120)
@@ -407,11 +488,20 @@ class StockRepository(
             )
         }
 
+        val highs = candles.map { it.high }
+        val lows = candles.map { it.low }
+
         return HistoricalData(
             symbol = clean,
             range = range,
             interval = "${scale}m",
-            candles = candles
+            candles = candles,
+            meta = HistoryMeta(
+                currency = "CNY",
+                previousClose = candles.firstOrNull()?.open ?: 0.0,
+                high = highs.maxOrNull() ?: 0.0,
+                low = lows.minOrNull() ?: 0.0
+            )
         )
     }
 

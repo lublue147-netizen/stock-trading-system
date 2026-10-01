@@ -45,13 +45,24 @@ describe('Stock Trading API Tests', () => {
     assert.ok(typeof firstCandle.low === 'number');
   });
 
-  test('GET /api/search?q=Tesla returns search results', async () => {
-    const res = await req('/api/search?q=Tesla');
+  test('GET /api/history?symbol=002579.SZ&range=1d returns intraday candles and meta', async () => {
+    const res = await req('/api/history?symbol=002579.SZ&range=1d');
+    assert.strictEqual(res.status, 200);
+    const history = (await res.json()) as any;
+    assert.ok(Array.isArray(history.candles));
+    assert.ok(history.candles.length > 0);
+    assert.ok(history.meta);
+    assert.ok(typeof history.meta.previousClose === 'number');
+    assert.ok(Array.isArray(history.meta.availableDates));
+  });
+
+  test('GET /api/search?q=中京电子 returns search results', async () => {
+    const res = await req('/api/search?q=中京电子');
     assert.strictEqual(res.status, 200);
     const results = (await res.json()) as any[];
     assert.ok(Array.isArray(results));
     assert.ok(results.length > 0);
-    assert.ok(results.some((r) => r.symbol === 'TSLA'));
+    assert.ok(results.some((r) => r.symbol.includes('002579')));
   });
 
   test('GET /api/market/indices returns market indices', async () => {

@@ -63,6 +63,8 @@ export interface HistoricalData {
     previousClose: number;
     high: number;
     low: number;
+    selectedDate?: string;
+    availableDates?: string[];
   };
 }
 

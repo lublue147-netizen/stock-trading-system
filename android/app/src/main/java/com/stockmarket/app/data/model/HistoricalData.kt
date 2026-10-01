@@ -8,7 +8,9 @@ data class HistoryMeta(
     @Json(name = "currency") val currency: String? = null,
     @Json(name = "previousClose") val previousClose: Double? = null,
     @Json(name = "high") val high: Double? = null,
-    @Json(name = "low") val low: Double? = null
+    @Json(name = "low") val low: Double? = null,
+    @Json(name = "selectedDate") val selectedDate: String? = null,
+    @Json(name = "availableDates") val availableDates: List<String>? = null
 )
 
 @JsonClass(generateAdapter = true)

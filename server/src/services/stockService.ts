@@ -265,47 +265,123 @@ export async function fetchBatchQuotes(symbols: string[]): Promise<StockQuote[]>
   return Promise.all(symbols.map(s => fetchStockQuote(s)));
 }
 
-export async function fetchHistoricalData(symbol: string, range = '1mo', interval?: string): Promise<HistoricalData> {
+export async function fetchHistoricalData(
+  symbol: string,
+  range = '1mo',
+  interval?: string,
+  date?: string
+): Promise<HistoricalData> {
   const cleanSymbol = symbol.trim().toUpperCase();
   const tCode = symbolToTencentCode(cleanSymbol);
 
   // 1. Primary Engine: Sina Finance KLine & Intraday
   try {
-    let scale = 240;
-    let datalen = 30;
-    switch (range) {
-      case '1d': scale = 5; datalen = 48; break;
-      case '5d': scale = 15; datalen = 80; break;
-      case '1mo': scale = 240; datalen = 30; break;
-      case '6mo': scale = 240; datalen = 120; break;
-      case '1y': scale = 1200; datalen = 52; break;
-      case 'all': scale = 7200; datalen = 60; break;
-      default: scale = 240; datalen = 30; break;
-    }
+    if (range === '1d') {
+      const sinaUrl = `https://quotes.sina.cn/cn/api/json_v2.php/CN_MarketDataService.getKLineData?symbol=${tCode}&scale=5&ma=no&datalen=1440`;
+      const res = await fetch(sinaUrl, { headers: { 'User-Agent': USER_AGENT } });
+      if (res.ok) {
+        const list = (await res.json()) as any[];
+        if (Array.isArray(list) && list.length > 0) {
+          const byDate = new Map<string, any[]>();
+          for (const item of list) {
+            const d = item.day ? item.day.split(' ')[0] : '';
+            if (!d) continue;
+            if (!byDate.has(d)) byDate.set(d, []);
+            byDate.get(d)!.push(item);
+          }
+          const sortedDates = Array.from(byDate.keys()).sort();
+          if (sortedDates.length > 0) {
+            const targetDate = (date && byDate.has(date)) ? date : sortedDates[sortedDates.length - 1];
+            const targetIdx = sortedDates.indexOf(targetDate);
+            const prevDate = targetIdx > 0 ? sortedDates[targetIdx - 1] : null;
+            const prevClose = prevDate
+              ? parseFloat(byDate.get(prevDate)!.slice(-1)[0].close) || 0
+              : parseFloat(byDate.get(targetDate)![0].open) || 0;
 
-    const sinaUrl = `https://quotes.sina.cn/cn/api/json_v2.php/CN_MarketDataService.getKLineData?symbol=${tCode}&scale=${scale}&ma=no&datalen=${datalen}`;
-    const res = await fetch(sinaUrl, { headers: { 'User-Agent': USER_AGENT } });
-    if (res.ok) {
-      const list = await res.json() as any[];
-      if (Array.isArray(list) && list.length > 0) {
-        const candles: CandlePoint[] = list.map(item => {
-          const dateStr = item.day || '';
-          const ts = new Date(dateStr.replace(/-/g, '/')).getTime();
+            const dayBars = byDate.get(targetDate) || [];
+            const candles: CandlePoint[] = dayBars.map((item) => {
+              const dateStr = item.day || '';
+              const ts = new Date(dateStr.replace(/-/g, '/')).getTime();
+              return {
+                timestamp: !isNaN(ts) ? ts : Date.now(),
+                open: parseFloat(item.open) || 0,
+                high: parseFloat(item.high) || 0,
+                low: parseFloat(item.low) || 0,
+                close: parseFloat(item.close) || 0,
+                volume: parseFloat(item.volume) || 0,
+              };
+            });
+
+            const highs = candles.map((c) => c.high);
+            const lows = candles.map((c) => c.low);
+            const high = highs.length > 0 ? Math.max(...highs) : 0;
+            const low = lows.length > 0 ? Math.min(...lows) : 0;
+
+            return {
+              symbol: cleanSymbol,
+              range: '1d',
+              interval: '5m',
+              candles,
+              meta: {
+                currency: 'CNY',
+                previousClose: prevClose,
+                high,
+                low,
+                selectedDate: targetDate,
+                availableDates: sortedDates,
+              },
+            };
+          }
+        }
+      }
+    } else {
+      let scale = 240;
+      let datalen = 30;
+      switch (range) {
+        case '5d': scale = 15; datalen = 80; break;
+        case '1mo': scale = 240; datalen = 30; break;
+        case '6mo': scale = 240; datalen = 120; break;
+        case '1y': scale = 1200; datalen = 52; break;
+        case 'all': scale = 7200; datalen = 60; break;
+        default: scale = 240; datalen = 30; break;
+      }
+
+      const sinaUrl = `https://quotes.sina.cn/cn/api/json_v2.php/CN_MarketDataService.getKLineData?symbol=${tCode}&scale=${scale}&ma=no&datalen=${datalen}`;
+      const res = await fetch(sinaUrl, { headers: { 'User-Agent': USER_AGENT } });
+      if (res.ok) {
+        const list = (await res.json()) as any[];
+        if (Array.isArray(list) && list.length > 0) {
+          const candles: CandlePoint[] = list.map((item) => {
+            const dateStr = item.day || '';
+            const ts = new Date(dateStr.replace(/-/g, '/')).getTime();
+            return {
+              timestamp: !isNaN(ts) ? ts : Date.now(),
+              open: parseFloat(item.open) || 0,
+              high: parseFloat(item.high) || 0,
+              low: parseFloat(item.low) || 0,
+              close: parseFloat(item.close) || 0,
+              volume: parseFloat(item.volume) || 0,
+            };
+          });
+
+          const highs = candles.map((c) => c.high);
+          const lows = candles.map((c) => c.low);
+          const high = highs.length > 0 ? Math.max(...highs) : 0;
+          const low = lows.length > 0 ? Math.min(...lows) : 0;
+
           return {
-            timestamp: !isNaN(ts) ? ts : Date.now(),
-            open: parseFloat(item.open) || 0,
-            high: parseFloat(item.high) || 0,
-            low: parseFloat(item.low) || 0,
-            close: parseFloat(item.close) || 0,
-            volume: parseFloat(item.volume) || 0
+            symbol: cleanSymbol,
+            range,
+            interval: `${scale}m`,
+            candles,
+            meta: {
+              currency: 'CNY',
+              previousClose: candles[0]?.open || 0,
+              high,
+              low,
+            },
           };
-        });
-        return {
-          symbol: cleanSymbol,
-          range,
-          interval: `${scale}m`,
-          candles
-        };
+        }
       }
     }
   } catch (err) {
@@ -332,8 +408,8 @@ export async function fetchHistoricalData(symbol: string, range = '1mo', interva
     const res = await fetch(url, {
       headers: {
         'User-Agent': USER_AGENT,
-        'Accept': 'application/json'
-      }
+        'Accept': 'application/json',
+      },
     });
 
     if (res.ok) {
@@ -358,17 +434,25 @@ export async function fetchHistoricalData(symbol: string, range = '1mo', interva
               high: highs[i] ?? c,
               low: lows[i] ?? c,
               close: c,
-              volume: volumes[i] ?? 0
+              volume: volumes[i] ?? 0,
             });
           }
         }
 
         if (candles.length > 0) {
+          const cHighs = candles.map((c) => c.high);
+          const cLows = candles.map((c) => c.low);
           return {
             symbol: cleanSymbol,
             range,
             interval: chosenInterval,
-            candles
+            candles,
+            meta: {
+              currency: 'CNY',
+              previousClose: result.meta?.chartPreviousClose ?? candles[0].open,
+              high: cHighs.length > 0 ? Math.max(...cHighs) : 0,
+              low: cLows.length > 0 ? Math.min(...cLows) : 0,
+            },
           };
         }
       }
@@ -379,11 +463,18 @@ export async function fetchHistoricalData(symbol: string, range = '1mo', interva
 
   // 3. Fallback to mock candles
   const mockQuote = await fetchStockQuote(cleanSymbol);
+  const mockCandles = generateMockCandles(mockQuote.price, range);
   return {
     symbol: cleanSymbol,
     range,
     interval: chosenInterval || '1d',
-    candles: generateMockCandles(mockQuote.price, range)
+    candles: mockCandles,
+    meta: {
+      currency: 'CNY',
+      previousClose: mockQuote.previousClose,
+      high: mockQuote.high,
+      low: mockQuote.low,
+    },
   };
 }
 

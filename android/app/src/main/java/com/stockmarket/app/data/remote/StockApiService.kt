@@ -22,7 +22,8 @@ interface StockApiService {
     suspend fun getHistory(
         @Query("symbol") symbol: String,
         @Query("range") range: String = "1mo",
-        @Query("interval") interval: String? = null
+        @Query("interval") interval: String? = null,
+        @Query("date") date: String? = null
     ): HistoricalData
 
     @GET("api/search")

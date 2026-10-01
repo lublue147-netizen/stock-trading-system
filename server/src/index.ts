@@ -80,7 +80,8 @@ export default {
       }
       const range = url.searchParams.get('range') || '1mo';
       const interval = url.searchParams.get('interval') || undefined;
-      const history = await fetchHistoricalData(symbol, range, interval);
+      const date = url.searchParams.get('date') || undefined;
+      const history = await fetchHistoricalData(symbol, range, interval, date);
       return jsonResponse(history, 200, 30);
     }
 

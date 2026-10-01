@@ -23,7 +23,11 @@ data class StockDetailUiState(
     val chartType: ChartType = ChartType.LINE,
     val isWatchlisted: Boolean = false,
     val showMA: Boolean = true,
-    val errorMessage: String? = null
+    val errorMessage: String? = null,
+    val selectedIntradayDate: String? = null,
+    val availableIntradayDates: List<String> = emptyList(),
+    val isHistoricalIntraday: Boolean = false,
+    val historicalPreviousClose: Double? = null
 )
 
 class StockDetailViewModel(
@@ -58,19 +62,62 @@ class StockDetailViewModel(
         }
     }
 
-    fun loadHistory(range: String) {
+    fun loadHistory(range: String, date: String? = null) {
         val suggestedType = if (range == "1d" || range == "5d") ChartType.LINE else ChartType.CANDLESTICK
         viewModelScope.launch {
-            _uiState.update { it.copy(isLoadingChart = true, selectedRange = range, chartType = suggestedType) }
-            val res = repository.getHistoricalData(symbol, range)
+            _uiState.update {
+                it.copy(
+                    isLoadingChart = true,
+                    selectedRange = range,
+                    chartType = suggestedType,
+                    selectedIntradayDate = date
+                )
+            }
+            val res = repository.getHistoricalData(symbol, range, date)
+            val history = res.getOrNull()
+            val availDates = history?.meta?.availableDates ?: _uiState.value.availableIntradayDates
+            val selectedDate = history?.meta?.selectedDate ?: date ?: availDates.lastOrNull()
+            val latestDate = availDates.lastOrNull()
+            val isHistorical = range == "1d" && selectedDate != null && latestDate != null && selectedDate != latestDate
+            val prevClose = history?.meta?.previousClose
+
             _uiState.update {
                 it.copy(
                     isLoadingChart = false,
-                    historicalData = res.getOrNull(),
-                    selectedRange = range
+                    historicalData = history,
+                    selectedRange = range,
+                    selectedIntradayDate = selectedDate,
+                    availableIntradayDates = availDates,
+                    isHistoricalIntraday = isHistorical,
+                    historicalPreviousClose = prevClose
                 )
             }
         }
+    }
+
+    fun selectHistoricalDate(date: String) {
+        loadHistory("1d", date)
+    }
+
+    fun stepDate(direction: Int) {
+        val dates = _uiState.value.availableIntradayDates
+        if (dates.isEmpty()) return
+        val currentDate = _uiState.value.selectedIntradayDate ?: dates.lastOrNull() ?: return
+        val currentIndex = dates.indexOf(currentDate)
+        if (currentIndex == -1) return
+        val nextIndex = currentIndex + direction
+        if (nextIndex in dates.indices) {
+            val targetDate = dates[nextIndex]
+            if (nextIndex == dates.size - 1) {
+                loadHistory("1d", null)
+            } else {
+                loadHistory("1d", targetDate)
+            }
+        }
+    }
+
+    fun resetToToday() {
+        loadHistory("1d", null)
     }
 
     fun setChartType(type: ChartType) {
