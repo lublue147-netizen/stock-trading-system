@@ -1,11 +1,16 @@
 package com.stockmarket.app.data.model
 
-enum class ThematicSectorType(val title: String, val badge: String, val desc: String) {
-    MULTI_BOARD("最近多板", "连板天梯", "近期连板高度龙头及多板梯队"),
-    YESTERDAY_LIMIT_UP("昨日涨停-含一字", "超短接力", "昨日涨停及一字板股票今日接力溢价表现"),
-    TREND_STOCKS("趋势股", "机构重仓", "均线多头主升浪与中长期上升通道股票"),
-    ALL_TIME_HIGH("历史新高", "创历史高", "突破历史最高价或临近历史峰值股票"),
-    AVERAGE_PRICE("A股平均股价", "全市场脉搏", "全A指数均价与全市场涨跌情绪透视")
+enum class ThematicSectorType(
+    val title: String,
+    val bkCode: String,
+    val badge: String,
+    val desc: String
+) {
+    MULTI_BOARD("最近多板", "BK1638", "连板天梯", "东方财富最近多板板块(BK1638)最新成分股"),
+    YESTERDAY_LIMIT_UP("昨日涨停-含一字", "BK1050", "超短接力", "东方财富昨日涨停_含一字板块(BK1050)最新成分股"),
+    TREND_STOCKS("趋势股", "BK1715", "主升浪", "东方财富趋势股板块(BK1715)最新成分股"),
+    ALL_TIME_HIGH("历史新高", "BK1675", "突破高点", "东方财富历史新高板块(BK1675)最新成分股"),
+    AVERAGE_PRICE("A股平均股价", "800005", "全市场脉搏", "全A指数均价、两市总成交额与涨跌情绪全景")
 }
 
 data class ThematicStockItem(

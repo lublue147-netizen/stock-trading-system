@@ -85,12 +85,34 @@ fun CandlestickChart(
     val vol10 = remember(candles) { calculateVolMA(candles, 10) }
     val vwap = remember(candles) { calculateVWAP(candles) }
 
+    val auctionIndex: Int? = remember(candles, chartType) {
+        if (chartType == ChartType.LINE && candles.isNotEmpty()) {
+            val sdfHHmm = SimpleDateFormat("HH:mm", Locale.getDefault()).apply {
+                timeZone = TimeZone.getTimeZone("GMT+8")
+            }
+            val idx = candles.indexOfFirst {
+                val t = sdfHHmm.format(Date(it.timestamp))
+                t >= "09:30"
+            }
+            if (idx > 0) idx else null
+        } else null
+    }
+
     val activeIndex = selectedIndex ?: (candles.size - 1).coerceAtLeast(0)
     val activeCandle = candles.getOrNull(activeIndex)
     val activeMA5 = ma5.getOrNull(activeIndex)
     val activeMA10 = ma10.getOrNull(activeIndex)
     val activeMA20 = ma20.getOrNull(activeIndex)
     val activeVWAP = vwap.getOrNull(activeIndex)
+
+    val isAuction = remember(activeCandle, chartType) {
+        if (chartType == ChartType.LINE && activeCandle != null) {
+            val t = SimpleDateFormat("HH:mm", Locale.getDefault()).apply {
+                timeZone = TimeZone.getTimeZone("GMT+8")
+            }.format(Date(activeCandle.timestamp))
+            t < "09:30"
+        } else false
+    }
 
     val activeVol5 = vol5.getOrNull(activeIndex)
     val activeVol10 = vol10.getOrNull(activeIndex)
@@ -136,14 +158,33 @@ fun CandlestickChart(
                     horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Text(
-                        text = dateStr,
-                        color = TextSecondary,
-                        fontSize = 11.sp
-                    )
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Text(
-                            text = "现价: ${String.format(Locale.US, "%.2f", activeCandle.close)}",
+                            text = dateStr,
+                            color = TextSecondary,
+                            fontSize = 11.sp
+                        )
+                        if (isAuction) {
+                            Spacer(modifier = Modifier.width(5.dp))
+                            Box(
+                                modifier = Modifier
+                                    .clip(RoundedCornerShape(3.dp))
+                                    .background(EastMoneyOrange.copy(alpha = 0.2f))
+                                    .border(1.dp, EastMoneyOrange.copy(alpha = 0.7f), RoundedCornerShape(3.dp))
+                                    .padding(horizontal = 4.dp, vertical = 1.dp)
+                            ) {
+                                Text(
+                                    text = "集合竞价",
+                                    color = EastMoneyOrange,
+                                    fontSize = 9.sp,
+                                    fontWeight = FontWeight.Bold
+                                )
+                            }
+                        }
+                    }
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text(
+                            text = if (isAuction) "竞价: ${String.format(Locale.US, "%.2f", activeCandle.close)}" else "现价: ${String.format(Locale.US, "%.2f", activeCandle.close)}",
                             color = candleColor,
                             fontSize = 12.sp,
                             fontWeight = FontWeight.Bold
@@ -308,7 +349,10 @@ fun CandlestickChart(
                     maxPrice = adjustedMinPrice + priceSpan
                 }
 
-                val maxVolume = max(1L, candles.maxOf { it.volume }).toFloat()
+                val candleCount = candles.size
+                val candleWidth = width / candleCount
+                val barWidth = max(2f, candleWidth * 0.72f)
+                val auctionX = if (chartType == ChartType.LINE && auctionIndex != null) (auctionIndex * candleWidth) else null
 
                 // Draw Background Grid
                 drawEastMoneyGrid(
@@ -317,12 +361,9 @@ fun CandlestickChart(
                     volTop = volumeChartTop,
                     volHeight = volumeChartHeight,
                     chartType = chartType,
-                    hasPrevClose = chartType == ChartType.LINE && previousClose != null
+                    hasPrevClose = chartType == ChartType.LINE && previousClose != null,
+                    auctionX = auctionX
                 )
-
-            val candleCount = candles.size
-            val candleWidth = width / candleCount
-            val barWidth = max(2f, candleWidth * 0.72f)
 
             // Draw Candlesticks or Line Chart
             if (chartType == ChartType.CANDLESTICK) {
@@ -558,11 +599,19 @@ fun CandlestickChart(
             horizontalArrangement = Arrangement.SpaceBetween
         ) {
             if (chartType == ChartType.LINE) {
-                Text("09:30", color = TextMuted, fontSize = 9.sp)
-                Text("10:30", color = TextMuted, fontSize = 9.sp)
-                Text("11:30/13:00", color = TextMuted, fontSize = 9.sp)
-                Text("14:00", color = TextMuted, fontSize = 9.sp)
-                Text("15:00", color = TextMuted, fontSize = 9.sp)
+                if (auctionIndex != null) {
+                    Text("09:15(竞价)", color = EastMoneyOrange, fontSize = 9.sp, fontWeight = FontWeight.SemiBold)
+                    Text("09:30", color = TextSecondary, fontSize = 9.sp)
+                    Text("11:30/13:00", color = TextMuted, fontSize = 9.sp)
+                    Text("14:00", color = TextMuted, fontSize = 9.sp)
+                    Text("15:00", color = TextMuted, fontSize = 9.sp)
+                } else {
+                    Text("09:30", color = TextMuted, fontSize = 9.sp)
+                    Text("10:30", color = TextMuted, fontSize = 9.sp)
+                    Text("11:30/13:00", color = TextMuted, fontSize = 9.sp)
+                    Text("14:00", color = TextMuted, fontSize = 9.sp)
+                    Text("15:00", color = TextMuted, fontSize = 9.sp)
+                }
             } else {
                 val dayFormat = remember { SimpleDateFormat("MM-dd", Locale.getDefault()) }
                 val startDay = candles.firstOrNull()?.let { dayFormat.format(Date(it.timestamp)) } ?: ""
@@ -582,7 +631,8 @@ private fun DrawScope.drawEastMoneyGrid(
     volTop: Float,
     volHeight: Float,
     chartType: ChartType,
-    hasPrevClose: Boolean
+    hasPrevClose: Boolean,
+    auctionX: Float? = null
 ) {
     val gridColor = SurfaceBorder.copy(alpha = 0.5f)
     val dashEffect = PathEffect.dashPathEffect(floatArrayOf(6f, 6f))
@@ -602,6 +652,25 @@ private fun DrawScope.drawEastMoneyGrid(
     val botY = priceHeight * 0.75f
     drawLine(color = gridColor, start = Offset(0f, topY), end = Offset(width, topY), strokeWidth = 1f, pathEffect = dashEffect)
     drawLine(color = gridColor, start = Offset(0f, botY), end = Offset(width, botY), strokeWidth = 1f, pathEffect = dashEffect)
+
+    // Vertical auction delimiter (09:15-09:25 vs 09:30)
+    if (auctionX != null && auctionX > 0f) {
+        val auctionDash = PathEffect.dashPathEffect(floatArrayOf(4f, 4f))
+        drawLine(
+            color = EastMoneyOrange.copy(alpha = 0.6f),
+            start = Offset(auctionX, 0f),
+            end = Offset(auctionX, priceHeight),
+            strokeWidth = 1.2f,
+            pathEffect = auctionDash
+        )
+        drawLine(
+            color = EastMoneyOrange.copy(alpha = 0.4f),
+            start = Offset(auctionX, volTop),
+            end = Offset(auctionX, volTop + volHeight),
+            strokeWidth = 1f,
+            pathEffect = auctionDash
+        )
+    }
 
     // Divider between price and volume
     drawLine(
@@ -693,10 +762,12 @@ private fun calculateVWAP(candles: List<CandlePoint>): List<Double?> {
     var cumVol = 0.0
     var cumAmt = 0.0
     return candles.map { candle ->
-        val vol = candle.volume.toDouble().coerceAtLeast(1.0)
+        val vol = candle.volume.toDouble()
         val tp = (candle.open + candle.high + candle.low + candle.close) / 4.0
-        cumVol += vol
-        cumAmt += tp * vol
+        if (vol > 0.0) {
+            cumVol += vol
+            cumAmt += tp * vol
+        }
         if (cumVol > 0.0) cumAmt / cumVol else candle.close
     }
 }

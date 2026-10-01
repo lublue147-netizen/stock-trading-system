@@ -7,6 +7,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import okhttp3.Request
 import org.json.JSONArray
+import org.json.JSONObject
 import java.nio.charset.Charset
 import java.text.SimpleDateFormat
 import java.util.*
@@ -84,7 +85,20 @@ class StockRepository(
     }
 
     suspend fun getHistoricalData(symbol: String, range: String, date: String? = null): Result<HistoricalData> = withContext(Dispatchers.IO) {
-        // 1. Primary Engine: Direct Sina Finance KLine & 5-min Intraday API
+        // 1. Primary Engine for Today's Intraday: East Money Trends2 with 09:15-09:25 Call Auction (集合竞价分时)
+        if (range == "1d" && date == null) {
+            try {
+                fetchDirectEastMoneyTrends(symbol)?.let { data ->
+                    if (data.candles.isNotEmpty()) {
+                        return@withContext Result.success(data)
+                    }
+                }
+            } catch (e: Exception) {
+                // continue to Sina fallback
+            }
+        }
+
+        // 2. Direct Sina Finance KLine & Historical Intraday API
         try {
             fetchDirectSinaHistory(symbol, range, date)?.let { data ->
                 if (data.candles.isNotEmpty()) {
@@ -95,7 +109,7 @@ class StockRepository(
             // continue to secondary
         }
 
-        // 2. Secondary Engine: Configured Cloudflare Worker API
+        // 3. Secondary Engine: Configured Cloudflare Worker API
         try {
             val data = getService().getHistory(symbol = symbol, range = range, date = date)
             if (data.candles.isNotEmpty()) {
@@ -105,7 +119,7 @@ class StockRepository(
             // continue to fallback
         }
 
-        // 3. Fallback
+        // 4. Fallback
         Result.success(createFallbackHistory(symbol, range))
     }
 
@@ -246,15 +260,38 @@ class StockRepository(
     )
 
     suspend fun getThematicSectors(): Result<Map<ThematicSectorType, List<ThematicStockItem>>> = withContext(Dispatchers.IO) {
+        val resultMap = mutableMapOf<ThematicSectorType, MutableList<ThematicStockItem>>()
+        for (type in ThematicSectorType.values()) {
+            resultMap[type] = mutableListOf()
+        }
+
+        // 1. Primary Engine: Direct East Money Sector Constituents (BK1638, BK1050, BK1715, BK1675)
+        var anyLoaded = false
+        val bkSectors = listOf(
+            ThematicSectorType.MULTI_BOARD,
+            ThematicSectorType.YESTERDAY_LIMIT_UP,
+            ThematicSectorType.TREND_STOCKS,
+            ThematicSectorType.ALL_TIME_HIGH
+        )
+        for (type in bkSectors) {
+            try {
+                val items = fetchEastMoneySectorConstituents(type.bkCode, limit = 15)
+                if (items.isNotEmpty()) {
+                    resultMap[type]?.addAll(items)
+                    anyLoaded = true
+                }
+            } catch (_: Exception) {}
+        }
+
+        if (anyLoaded) {
+            return@withContext Result.success(resultMap)
+        }
+
+        // 2. Secondary Engine: Tencent batch query fallback
         try {
             val allSymbols = THEMATIC_STOCK_DEFS.map { it.symbol }.distinct()
             val quotes = fetchDirectTencentQuotes(allSymbols) ?: emptyList()
             val quoteMap = quotes.associateBy { it.symbol.uppercase() }
-
-            val resultMap = mutableMapOf<ThematicSectorType, MutableList<ThematicStockItem>>()
-            for (type in ThematicSectorType.values()) {
-                resultMap[type] = mutableListOf()
-            }
 
             for (def in THEMATIC_STOCK_DEFS) {
                 val q = quoteMap[def.symbol.uppercase()]
@@ -275,26 +312,10 @@ class StockRepository(
                 )
                 resultMap[def.sectorType]?.add(item)
             }
+            return@withContext Result.success(resultMap)
+        } catch (_: Exception) {}
 
-            Result.success(resultMap)
-        } catch (e: Exception) {
-            // graceful fallback
-            val fallbackMap = mutableMapOf<ThematicSectorType, MutableList<ThematicStockItem>>()
-            for (def in THEMATIC_STOCK_DEFS) {
-                val fallbackItem = ThematicStockItem(
-                    symbol = def.symbol,
-                    name = def.defaultName,
-                    price = 18.88,
-                    change = 1.25,
-                    changePercent = 7.10,
-                    boardCount = def.boardCount,
-                    tag = def.tag,
-                    subDetail = def.subDetail
-                )
-                fallbackMap.getOrPut(def.sectorType) { mutableListOf() }.add(fallbackItem)
-            }
-            Result.success(fallbackMap)
-        }
+        Result.success(resultMap)
     }
 
     suspend fun getMarketBreadth(): Result<MarketBreadth> = withContext(Dispatchers.IO) {
@@ -395,6 +416,140 @@ class StockRepository(
         }
 
         Result.success(MarketBreadth())
+    }
+
+    // --- Direct East Money Trends & Sector Implementations (09:15-09:25 竞价分时 & BK板块成分) ---
+
+    private fun symbolToEastMoneySecId(symbol: String): String {
+        val clean = symbol.trim().uppercase()
+        val code = clean.substringBefore(".")
+        return when {
+            clean == "000001.SS" || clean == "SH000001" -> "1.000001"
+            clean == "399001.SZ" || clean == "SZ399001" -> "0.399001"
+            clean == "399006.SZ" || clean == "SZ399006" -> "0.399006"
+            clean.endsWith(".SS") || code.startsWith("6") || code.startsWith("68") -> "1.$code"
+            clean.endsWith(".BJ") || code.startsWith("8") || code.startsWith("4") || code.startsWith("920") -> "0.$code"
+            else -> "0.$code"
+        }
+    }
+
+    private fun fetchDirectEastMoneyTrends(symbol: String): HistoricalData? {
+        val clean = symbol.trim().uppercase()
+        val secId = symbolToEastMoneySecId(clean)
+        val url = "https://push2.eastmoney.com/api/qt/stock/trends2/get?secid=$secId&fields1=f1,f2,f3,f4,f5,f6,f7,f8,f9,f10,f11,f12,f13&fields2=f51,f52,f53,f54,f55,f56,f57,f58"
+        val request = Request.Builder()
+            .url(url)
+            .header("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64)")
+            .header("Referer", "https://quote.eastmoney.com/")
+            .build()
+
+        val response = ApiClient.okHttpClient.newCall(request).execute()
+        if (!response.isSuccessful) return null
+        val bodyStr = response.body?.string() ?: return null
+        val rootObj = JSONObject(bodyStr)
+        val dataObj = rootObj.optJSONObject("data") ?: return null
+        val trendsArr = dataObj.optJSONArray("trends") ?: return null
+        if (trendsArr.length() == 0) return null
+
+        val preClose = dataObj.optDouble("preClose", 0.0)
+        val sdfMinute = SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.getDefault()).apply {
+            timeZone = TimeZone.getTimeZone("GMT+8")
+        }
+
+        val candles = ArrayList<CandlePoint>(trendsArr.length())
+        for (i in 0 until trendsArr.length()) {
+            val line = trendsArr.optString(i, "")
+            if (line.isEmpty()) continue
+            val parts = line.split(",")
+            if (parts.size >= 6) {
+                val dtStr = parts[0]
+                val ts = try {
+                    sdfMinute.parse(dtStr)?.time ?: System.currentTimeMillis()
+                } catch (_: Exception) {
+                    System.currentTimeMillis()
+                }
+                val open = parts[1].toDoubleOrNull() ?: 0.0
+                val close = parts[2].toDoubleOrNull() ?: open
+                val high = parts[3].toDoubleOrNull() ?: max(open, close)
+                val low = parts[4].toDoubleOrNull() ?: min(open, close)
+                val vol = parts[5].toLongOrNull() ?: 0L
+                candles.add(
+                    CandlePoint(
+                        timestamp = ts,
+                        open = open,
+                        high = high,
+                        low = low,
+                        close = close,
+                        volume = vol
+                    )
+                )
+            }
+        }
+
+        return HistoricalData(
+            symbol = symbol,
+            range = "1d",
+            candles = candles,
+            meta = HistoryMeta(
+                previousClose = if (preClose > 0) preClose else null
+            )
+        )
+    }
+
+    private fun fetchEastMoneySectorConstituents(bkCode: String, limit: Int = 15): List<ThematicStockItem> {
+        val url = "https://push2.eastmoney.com/api/qt/clist/get?pn=1&pz=$limit&po=1&np=1&fltt=2&invt=2&fid=f3&fs=b:$bkCode&fields=f12,f14,f2,f3,f4,f5,f6,f7,f15,f16,f17,f18"
+        val request = Request.Builder()
+            .url(url)
+            .header("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64)")
+            .header("Referer", "https://quote.eastmoney.com/")
+            .build()
+
+        val response = ApiClient.okHttpClient.newCall(request).execute()
+        if (!response.isSuccessful) return emptyList()
+        val bodyStr = response.body?.string() ?: return emptyList()
+        val rootObj = JSONObject(bodyStr)
+        val dataObj = rootObj.optJSONObject("data") ?: return emptyList()
+        val diffArr = dataObj.optJSONArray("diff") ?: return emptyList()
+
+        val items = mutableListOf<ThematicStockItem>()
+        for (i in 0 until diffArr.length()) {
+            val d = diffArr.optJSONObject(i) ?: continue
+            val code = d.optString("f12", "")
+            val name = d.optString("f14", "")
+            val price = d.optDouble("f2", 0.0)
+            val chgPct = d.optDouble("f3", 0.0)
+            val chg = d.optDouble("f4", 0.0)
+
+            if (code.isNotEmpty() && price > 0.0) {
+                val fullSymbol = when {
+                    code.startsWith("6") || code.startsWith("68") -> "$code.SS"
+                    code.startsWith("8") || code.startsWith("4") || code.startsWith("920") -> "$code.BJ"
+                    else -> "$code.SZ"
+                }
+                val tag = when {
+                    chgPct >= 19.8 -> "20cm涨停"
+                    chgPct >= 9.8 -> "涨停领跑"
+                    chgPct >= 5.0 -> "多头主升"
+                    chgPct >= 0.0 -> "红盘趋势"
+                    else -> "高位蓄势"
+                }
+                val subDetail = "东财$bkCode成分股"
+
+                items.add(
+                    ThematicStockItem(
+                        symbol = fullSymbol,
+                        name = name,
+                        price = price,
+                        change = chg,
+                        changePercent = chgPct,
+                        boardCount = if (chgPct >= 9.8) 1 else null,
+                        tag = tag,
+                        subDetail = subDetail
+                    )
+                )
+            }
+        }
+        return items
     }
 
     // --- Direct Tencent & Sina Feed Implementations ---

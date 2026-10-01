@@ -297,14 +297,22 @@ private fun ThematicSectorsSection(
                             RoundedCornerShape(6.dp)
                         )
                         .clickable { onSectorSelected(type) }
-                        .padding(horizontal = 10.dp, vertical = 6.dp)
+                        .padding(horizontal = 10.dp, vertical = 5.dp)
                 ) {
-                    Text(
-                        text = type.title,
-                        fontSize = 12.sp,
-                        fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium,
-                        color = if (isSelected) Color.White else TextSecondary
-                    )
+                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                        Text(
+                            text = type.title,
+                            fontSize = 12.sp,
+                            fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium,
+                            color = if (isSelected) Color.White else TextSecondary
+                        )
+                        Text(
+                            text = type.bkCode,
+                            fontSize = 9.sp,
+                            fontWeight = FontWeight.SemiBold,
+                            color = if (isSelected) Color.White.copy(alpha = 0.85f) else TextMuted
+                        )
+                    }
                 }
             }
         }
