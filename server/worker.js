@@ -250,8 +250,73 @@ async function fetchQuote(symbol) {
   return fallbackQuote(clean);
 }
 
-async function fetchHistory(symbol, range = '1mo', interval) {
+async function fetchHistory(symbol, range = '1mo', interval, date) {
   const clean = normalizeSymbol(symbol);
+  const code = clean.replace(/\.(SS|SZ|BJ)$/i, '');
+  const tCode = clean.endsWith('.SS') || code.startsWith('6') ? `sh${code}` :
+                clean.endsWith('.BJ') || code.startsWith('8') || code.startsWith('4') || code.startsWith('920') ? `bj${code}` : `sz${code}`;
+
+  if (range === '1d') {
+    try {
+      const url = `https://quotes.sina.cn/cn/api/json_v2.php/CN_MarketDataService.getKLineData?symbol=${tCode}&scale=5&ma=no&datalen=1440`;
+      const res = await fetch(url, { headers: { 'User-Agent': USER_AGENT } });
+      if (res.ok) {
+        const list = await res.json();
+        if (Array.isArray(list) && list.length > 0) {
+          const byDate = new Map();
+          for (const item of list) {
+            const d = item.day ? item.day.split(' ')[0] : '';
+            if (!d) continue;
+            if (!byDate.has(d)) byDate.set(d, []);
+            byDate.get(d).push(item);
+          }
+          const sortedDates = Array.from(byDate.keys()).sort();
+          if (sortedDates.length > 0) {
+            const targetDate = (date && byDate.has(date)) ? date : sortedDates[sortedDates.length - 1];
+            const targetIdx = sortedDates.indexOf(targetDate);
+            const prevDate = targetIdx > 0 ? sortedDates[targetIdx - 1] : null;
+            const prevClose = prevDate
+              ? parseFloat(byDate.get(prevDate).slice(-1)[0].close) || 0
+              : parseFloat(byDate.get(targetDate)[0].open) || 0;
+
+            const dayBars = byDate.get(targetDate) || [];
+            const candles = dayBars.map((item) => {
+              const dateStr = item.day || '';
+              const ts = new Date(dateStr.replace(/-/g, '/')).getTime();
+              return {
+                timestamp: !isNaN(ts) ? ts : Date.now(),
+                open: parseFloat(item.open) || 0,
+                high: parseFloat(item.high) || 0,
+                low: parseFloat(item.low) || 0,
+                close: parseFloat(item.close) || 0,
+                volume: parseFloat(item.volume) || 0
+              };
+            });
+
+            const highs = candles.map(c => c.high);
+            const lows = candles.map(c => c.low);
+            return {
+              symbol: clean,
+              range: '1d',
+              interval: '5m',
+              candles,
+              meta: {
+                currency: 'CNY',
+                previousClose: prevClose,
+                high: highs.length > 0 ? Math.max(...highs) : 0,
+                low: lows.length > 0 ? Math.min(...lows) : 0,
+                selectedDate: targetDate,
+                availableDates: sortedDates
+              }
+            };
+          }
+        }
+      }
+    } catch (e) {
+      // fallback
+    }
+  }
+
   let chosenInterval = interval;
   if (!chosenInterval) {
     if (range === '1d') chosenInterval = '5m';
@@ -298,9 +363,12 @@ async function fetchHistory(symbol, range = '1mo', interval) {
             range,
             interval: chosenInterval,
             candles,
-            previousClose: meta.chartPreviousClose || candles[0].open,
-            high: Math.max(...highs),
-            low: Math.min(...lows)
+            meta: {
+              currency: 'CNY',
+              previousClose: meta.chartPreviousClose || candles[0].open,
+              high: Math.max(...highs),
+              low: Math.min(...lows)
+            }
           };
         }
       }
@@ -318,9 +386,12 @@ async function fetchHistory(symbol, range = '1mo', interval) {
     range,
     interval: chosenInterval,
     candles,
-    previousClose: candles[0].open,
-    high: Math.max(...highs),
-    low: Math.min(...lows)
+    meta: {
+      currency: 'CNY',
+      previousClose: candles[0].open,
+      high: Math.max(...highs),
+      low: Math.min(...lows)
+    }
   };
 }
 
@@ -441,7 +512,8 @@ export default {
       if (!symbol) return jsonRes({ error: 'Query parameter "symbol" is required' }, 400);
       const range = url.searchParams.get('range') || '1mo';
       const interval = url.searchParams.get('interval') || undefined;
-      const history = await fetchHistory(symbol, range, interval);
+      const date = url.searchParams.get('date') || undefined;
+      const history = await fetchHistory(symbol, range, interval, date);
       return jsonRes(history, 200, 30);
     }
 
