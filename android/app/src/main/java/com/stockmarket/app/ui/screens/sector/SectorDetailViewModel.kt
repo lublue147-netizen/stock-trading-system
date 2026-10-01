@@ -7,6 +7,8 @@ import com.stockmarket.app.data.model.StockQuote
 import com.stockmarket.app.data.model.ThematicStockItem
 import com.stockmarket.app.data.repository.StockRepository
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.async
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -34,52 +36,109 @@ class SectorDetailViewModel(
     private val repository: StockRepository
 ) : ViewModel() {
 
-    private val _uiState = MutableStateFlow(
-        SectorDetailUiState(
-            bkCode = bkCode,
-            sectorName = sectorName,
-            isLoading = true,
-            isWatchlisted = repository.isWatchlisted(bkCode)
-        )
-    )
-    val uiState: StateFlow<SectorDetailUiState> = _uiState.asStateFlow()
+    private val _uiState: MutableStateFlow<SectorDetailUiState>
+    val uiState: StateFlow<SectorDetailUiState>
 
     private var refreshJob: Job? = null
 
     init {
-        loadData(isInitial = true)
+        val initialCached = repository.getCachedSectorDetail(bkCode)
+        if (initialCached != null) {
+            val name = if (initialCached.quote.name.isNotEmpty() && initialCached.quote.name != bkCode) initialCached.quote.name else sectorName
+            _uiState = MutableStateFlow(
+                SectorDetailUiState(
+                    bkCode = bkCode,
+                    sectorName = name,
+                    isLoading = false,
+                    quote = initialCached.quote,
+                    constituents = initialCached.constituents,
+                    totalConstituents = initialCached.totalCount,
+                    isWatchlisted = repository.isWatchlisted(bkCode)
+                )
+            )
+        } else {
+            _uiState = MutableStateFlow(
+                SectorDetailUiState(
+                    bkCode = bkCode,
+                    sectorName = sectorName,
+                    isLoading = true,
+                    isWatchlisted = repository.isWatchlisted(bkCode)
+                )
+            )
+        }
+        uiState = _uiState.asStateFlow()
+
+        loadData(isInitial = initialCached == null)
         startAutoRefresh()
     }
 
     fun loadData(isInitial: Boolean = false) {
         viewModelScope.launch {
             if (isInitial) {
-                _uiState.update { it.copy(isLoading = true, errorMessage = null) }
+                // Check if newly cached
+                val cached = repository.getCachedSectorDetail(bkCode)
+                if (cached != null) {
+                    val name = if (cached.quote.name.isNotEmpty() && cached.quote.name != bkCode) cached.quote.name else sectorName
+                    _uiState.update { state ->
+                        state.copy(
+                            isLoading = false,
+                            sectorName = name,
+                            quote = cached.quote,
+                            constituents = cached.constituents,
+                            totalConstituents = cached.totalCount
+                        )
+                    }
+                } else {
+                    _uiState.update { it.copy(isLoading = true, errorMessage = null) }
+                }
             } else {
                 _uiState.update { it.copy(isRefreshing = true, errorMessage = null) }
             }
 
-            // 1. Fetch Sector Quote and Constituents
-            val detailRes = repository.getSectorDetail(bkCode)
-            // 2. Fetch Sector Intraday Trends (09:15 - 15:00)
-            val trendsRes = repository.getHistoricalData(bkCode, "1d")
+            try {
+                coroutineScope {
+                    // Fetch Sector Quote + Constituents AND Intraday Trends in parallel!
+                    val detailDeferred = async { repository.getSectorDetail(bkCode) }
+                    val trendsDeferred = async { repository.getHistoricalData(bkCode, "1d") }
 
-            _uiState.update { state ->
-                val detail = detailRes.getOrNull()
-                val q = detail?.quote ?: state.quote
-                val name = if (q?.name?.isNotEmpty() == true && q.name != bkCode) q.name else state.sectorName
-                val trend = trendsRes.getOrNull()?.candles ?: state.trendCandles
+                    // As soon as sector constituents arrive, IMMEDIATELY update UI and clear loading spinner!
+                    val detailRes = detailDeferred.await()
+                    val detail = detailRes.getOrNull()
+                    if (detail != null) {
+                        val q = detail.quote
+                        val name = if (q.name.isNotEmpty() && q.name != bkCode) q.name else sectorName
+                        _uiState.update { state ->
+                            state.copy(
+                                isLoading = false,
+                                isRefreshing = false,
+                                sectorName = name,
+                                quote = q,
+                                constituents = detail.constituents,
+                                totalConstituents = detail.totalCount,
+                                isWatchlisted = repository.isWatchlisted(bkCode)
+                            )
+                        }
+                    }
 
-                state.copy(
-                    isLoading = false,
-                    isRefreshing = false,
-                    sectorName = name,
-                    quote = q,
-                    trendCandles = trend,
-                    constituents = detail?.constituents ?: state.constituents,
-                    totalConstituents = detail?.totalCount ?: state.totalConstituents,
-                    isWatchlisted = repository.isWatchlisted(bkCode)
-                )
+                    // Update trend candles when ready
+                    val trendsRes = trendsDeferred.await()
+                    val trend = trendsRes.getOrNull()?.candles
+                    if (trend != null) {
+                        _uiState.update { state ->
+                            state.copy(
+                                isLoading = false,
+                                isRefreshing = false,
+                                trendCandles = trend
+                            )
+                        }
+                    } else {
+                        _uiState.update { state ->
+                            state.copy(isLoading = false, isRefreshing = false)
+                        }
+                    }
+                }
+            } catch (_: Exception) {
+                _uiState.update { it.copy(isLoading = false, isRefreshing = false) }
             }
         }
     }

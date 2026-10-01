@@ -25,134 +25,88 @@ class StockRepository(
 
     private fun getService() = ApiClient.getService(preferences.getServerUrl())
 
-    private val stockIndustryCache = java.util.concurrent.ConcurrentHashMap<String, Pair<String, String>>()
+    private val sectorDetailCache = java.util.concurrent.ConcurrentHashMap<String, Pair<Long, SectorDetailResult>>()
+
+    fun getCachedSectorDetail(bkCode: String): SectorDetailResult? {
+        val clean = bkCode.trim().uppercase()
+        val cached = sectorDetailCache[clean] ?: return null
+        if (System.currentTimeMillis() - cached.first < 30_000) {
+            return cached.second
+        }
+        return null
+    }
 
     fun getSectorName(bkCode: String): String {
-        val clean = bkCode.trim().uppercase()
-        return SECTOR_NAME_MAP[clean] ?: when (clean) {
-            "BK1638" -> "最近多板"
-            "BK1050" -> "昨日涨停-含一字"
-            "BK1715" -> "趋势股"
-            "BK1675" -> "历史新高"
-            "BK1036" -> "半导体"
-            "BK1166" -> "低空经济"
-            "BK1184" -> "人形机器人"
-            "BK0854" -> "华为概念"
-            "800005" -> "A股平均股价"
-            else -> bkCode
-        }
+        return StockIndustryRegistry.getSectorName(bkCode)
     }
 
     fun resolveStockIndustry(symbol: String): Pair<String, String> {
-        val clean = symbol.trim().uppercase()
-        val code = clean.substringBefore(".")
-
-        KNOWN_STOCK_INDUSTRIES[clean]?.let { return it }
-        KNOWN_STOCK_INDUSTRIES[code]?.let { return it }
-
-        stockIndustryCache[code]?.let { return it }
-
-        try {
-            fetchStockIndustryFromSurvey(clean)?.let {
-                stockIndustryCache[code] = it
-                return it
-            }
-        } catch (_: Exception) {}
-
-        val fallback = when {
-            code.startsWith("688") -> Pair("半导体", "BK1036")
-            code.startsWith("300") || code.startsWith("301") -> Pair("电子元件", "BK0459")
-            code.startsWith("600") || code.startsWith("601") -> Pair("通用设备", "BK0545")
-            else -> Pair("电子元件", "BK0459")
-        }
-        stockIndustryCache[code] = fallback
-        return fallback
-    }
-
-    private fun fetchStockIndustryFromSurvey(symbol: String): Pair<String, String>? {
-        val clean = symbol.trim().uppercase()
-        val code = clean.substringBefore(".")
-        val market = when {
-            clean.endsWith(".SS") || code.startsWith("6") || code.startsWith("68") -> "SH"
-            clean.endsWith(".BJ") || code.startsWith("8") || code.startsWith("4") || code.startsWith("920") -> "BJ"
-            else -> "SZ"
-        }
-        val url = "https://emweb.securities.eastmoney.com/PC_HSF10/CompanySurvey/CompanySurveyAjax?code=$market$code"
-        return try {
-            val request = Request.Builder()
-                .url(url)
-                .header("User-Agent", "Mozilla/5.0")
-                .build()
-            val response = ApiClient.okHttpClient.newCall(request).execute()
-            if (!response.isSuccessful) return null
-            val body = response.body?.string() ?: return null
-            val obj = JSONObject(body)
-            val jbzl = obj.optJSONObject("jbzl") ?: return null
-            val sshy = jbzl.optString("sshy", "").trim().takeIf { it.isNotEmpty() && it != "--" }
-            val sszjhhy = jbzl.optString("sszjhhy", "").trim().takeIf { it.isNotEmpty() && it != "--" }
-
-            val rawInd = sshy ?: sszjhhy?.substringAfter("-") ?: ""
-            if (rawInd.isEmpty()) return null
-
-            val matchedBk = EAST_MONEY_INDUSTRY_MAP[rawInd]
-                ?: EAST_MONEY_INDUSTRY_MAP.entries.firstOrNull { rawInd.contains(it.key) || it.key.contains(rawInd) }?.value
-                ?: "BK0459"
-            val standardName = SECTOR_NAME_MAP[matchedBk] ?: rawInd
-            Pair(standardName, matchedBk)
-        } catch (_: Exception) {
-            null
-        }
+        return StockIndustryRegistry.resolveStockIndustryLocally(symbol)
     }
 
     suspend fun enrichQuotesWithIndustry(quotes: List<StockQuote>): List<StockQuote> {
         if (quotes.isEmpty()) return quotes
         val assigned = quotes.map { q ->
             if (q.symbol.startsWith("BK") || q.isIndex) q else {
-                val (indName, indBk) = resolveStockIndustry(q.symbol)
+                val (indName, indBk) = StockIndustryRegistry.resolveStockIndustryLocally(q.symbol)
                 q.copy(industry = indName, industryBkCode = indBk)
             }
         }
         val bkCodes = assigned.mapNotNull { it.industryBkCode }.distinct()
         if (bkCodes.isEmpty()) return assigned
 
+        // Client-side instant average fallback
+        val clientAverageMap = assigned.filter { it.industryBkCode != null && it.price > 0.0 }
+            .groupBy { it.industryBkCode!! }
+            .mapValues { entry ->
+                round(entry.value.map { it.changePercent }.average() * 100) / 100
+            }
+
         val sectorQuotes = try {
             fetchDirectEastMoneySectorQuotes(bkCodes) ?: emptyList()
         } catch (_: Exception) {
             emptyList()
         }
         val sectorMap = sectorQuotes.associate { it.symbol.uppercase() to it.changePercent }
-        val fallbackMap = assigned.filter { it.industryBkCode != null && it.price > 0.0 }
-            .groupBy { it.industryBkCode!! }
-            .mapValues { entry ->
-                round(entry.value.map { it.changePercent }.average() * 100) / 100
-            }
 
         return assigned.map { q ->
             if (q.industryBkCode != null) {
                 val chg = sectorMap[q.industryBkCode.uppercase()]
-                    ?: fallbackMap[q.industryBkCode]
+                    ?: clientAverageMap[q.industryBkCode]
                     ?: q.changePercent
                 q.copy(industryChangePercent = chg)
             } else q
         }
     }
 
-    suspend fun enrichConstituentsWithIndustry(items: List<ThematicStockItem>): List<ThematicStockItem> {
+    fun enrichConstituentsWithIndustry(
+        items: List<ThematicStockItem>,
+        currentSectorBkCode: String = "",
+        sectorQuoteChange: Double? = null
+    ): List<ThematicStockItem> {
         if (items.isEmpty()) return items
-        val assigned = items.map { item ->
-            val (indName, indBk) = resolveStockIndustry(item.symbol)
-            item.copy(industry = indName, industryBkCode = indBk)
-        }
-        val bkCodes = assigned.mapNotNull { it.industryBkCode }.distinct()
-        if (bkCodes.isEmpty()) return assigned
+        val cleanBk = currentSectorBkCode.trim().uppercase()
+        val isCurrentIndustry = StockIndustryRegistry.isIndustrySector(cleanBk)
+        val defaultIndName = StockIndustryRegistry.getSectorName(cleanBk)
 
-        val sectorQuotes = try {
-            fetchDirectEastMoneySectorQuotes(bkCodes) ?: emptyList()
-        } catch (_: Exception) {
-            emptyList()
+        val assigned = items.map { item ->
+            if (!item.industry.isNullOrEmpty() && !item.industryBkCode.isNullOrEmpty()) {
+                item
+            } else if (isCurrentIndustry) {
+                item.copy(industry = defaultIndName, industryBkCode = cleanBk)
+            } else {
+                val (indName, indBk) = StockIndustryRegistry.resolveStockIndustryLocally(item.symbol)
+                item.copy(industry = indName, industryBkCode = indBk)
+            }
         }
-        val sectorMap = sectorQuotes.associate { it.symbol.uppercase() to it.changePercent }
-        val fallbackMap = assigned.filter { it.industryBkCode != null && it.price > 0.0 }
+
+        // If currently in an industry sector, use its own change%
+        if (isCurrentIndustry && sectorQuoteChange != null) {
+            return assigned.map { it.copy(industryChangePercent = sectorQuoteChange) }
+        }
+
+        // Client-side instant average calculation (0ms, 0 network requests)
+        val clientAverageMap = assigned.filter { it.industryBkCode != null && it.price > 0.0 }
             .groupBy { it.industryBkCode!! }
             .mapValues { entry ->
                 round(entry.value.map { it.changePercent }.average() * 100) / 100
@@ -160,9 +114,7 @@ class StockRepository(
 
         return assigned.map { item ->
             if (item.industryBkCode != null) {
-                val chg = sectorMap[item.industryBkCode.uppercase()]
-                    ?: fallbackMap[item.industryBkCode]
-                    ?: item.changePercent
+                val chg = clientAverageMap[item.industryBkCode] ?: item.changePercent
                 item.copy(industryChangePercent = chg)
             } else item
         }
@@ -375,6 +327,11 @@ class StockRepository(
 
     suspend fun getSectorDetail(bkCode: String): Result<SectorDetailResult> = withContext(Dispatchers.IO) {
         val clean = bkCode.trim().uppercase()
+        // 1. Instant check for cached data
+        getCachedSectorDetail(clean)?.let {
+            return@withContext Result.success(it)
+        }
+
         val quote = fetchDirectEastMoneySectorQuotes(listOf(clean))?.firstOrNull() ?: StockQuote(
             symbol = clean,
             name = getSectorName(clean),
@@ -405,9 +362,15 @@ class StockRepository(
                 }
             } else emptyList()
         }
-        val enrichedConstituents = enrichConstituentsWithIndustry(finalConstituents)
+        val enrichedConstituents = enrichConstituentsWithIndustry(
+            items = finalConstituents,
+            currentSectorBkCode = clean,
+            sectorQuoteChange = quote.changePercent
+        )
         val finalTotal = if (totalCount > 0) maxOf(totalCount, enrichedConstituents.size) else enrichedConstituents.size
-        Result.success(SectorDetailResult(quote, enrichedConstituents, finalTotal))
+        val result = SectorDetailResult(quote, enrichedConstituents, finalTotal)
+        sectorDetailCache[clean] = Pair(System.currentTimeMillis(), result)
+        Result.success(result)
     }
 
     private fun fetchEastMoneySuggest(query: String): List<SearchResult>? {
@@ -655,7 +618,7 @@ class StockRepository(
 
         if (anyLoaded) {
             val enrichedMap = resultMap.mapValues { entry ->
-                enrichConstituentsWithIndustry(entry.value).toMutableList()
+                enrichConstituentsWithIndustry(entry.value, entry.key.bkCode).toMutableList()
             }
             return@withContext Result.success(enrichedMap)
         }
@@ -686,13 +649,13 @@ class StockRepository(
                 resultMap[def.sectorType]?.add(item)
             }
             val enrichedMap = resultMap.mapValues { entry ->
-                enrichConstituentsWithIndustry(entry.value).toMutableList()
+                enrichConstituentsWithIndustry(entry.value, entry.key.bkCode).toMutableList()
             }
             return@withContext Result.success(enrichedMap)
         } catch (_: Exception) {}
 
         val enrichedMap = resultMap.mapValues { entry ->
-            enrichConstituentsWithIndustry(entry.value).toMutableList()
+            enrichConstituentsWithIndustry(entry.value, entry.key.bkCode).toMutableList()
         }
         Result.success(enrichedMap)
     }
@@ -882,15 +845,20 @@ class StockRepository(
     private fun fetchEastMoneySectorConstituentsPage(
         bkCode: String,
         page: Int = 1,
-        pageSize: Int = 100
+        pageSize: Int = 500
     ): Pair<List<ThematicStockItem>, Int> {
-        val clean = bkCode.trim().uppercase()
-        val url = "https://push2.eastmoney.com/api/qt/clist/get?pn=$page&pz=$pageSize&po=1&np=1&ut=bd1d9ddb04089700cf9c27f6f7426281&fltt=2&invt=2&fid=f3&fs=b:$clean&fields=f12,f14,f2,f3,f4,f5,f6,f7,f15,f16,f17,f18"
+        val rawClean = bkCode.trim().uppercase()
+        val clean = if (!rawClean.startsWith("BK") && rawClean.matches(Regex("^[0-9]{4,6}$"))) "BK$rawClean" else rawClean
+        val isIndustrySector = StockIndustryRegistry.isIndustrySector(clean)
+        val defaultIndName = StockIndustryRegistry.getSectorName(clean)
+
+        val url = "https://push2.eastmoney.com/api/qt/clist/get?pn=$page&pz=$pageSize&po=1&np=1&ut=bd1d9ddb04089700cf9c27f6f7426281&fltt=2&invt=2&fid=f3&fs=b:$clean&fields=f12,f14,f2,f3,f4,f5,f6,f7,f15,f16,f17,f18,f100"
         try {
             val request = Request.Builder()
                 .url(url)
                 .header("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
                 .header("Referer", "https://quote.eastmoney.com/")
+                .header("Accept", "*/*")
                 .build()
 
             val response = ApiClient.okHttpClient.newCall(request).execute()
@@ -899,49 +867,88 @@ class StockRepository(
             val rootObj = JSONObject(bodyStr)
             val dataObj = rootObj.optJSONObject("data") ?: return Pair(emptyList(), 0)
             val total = dataObj.optInt("total", 0)
-            val diffArr = dataObj.optJSONArray("diff") ?: return Pair(emptyList(), total)
+
+            val jsonObjects = mutableListOf<JSONObject>()
+            val diffArr = dataObj.optJSONArray("diff")
+            if (diffArr != null) {
+                for (i in 0 until diffArr.length()) {
+                    diffArr.optJSONObject(i)?.let { jsonObjects.add(it) }
+                }
+            } else {
+                val diffObj = dataObj.optJSONObject("diff")
+                if (diffObj != null) {
+                    val keys = diffObj.keys()
+                    while (keys.hasNext()) {
+                        diffObj.optJSONObject(keys.next())?.let { jsonObjects.add(it) }
+                    }
+                }
+            }
 
             val items = mutableListOf<ThematicStockItem>()
-            for (i in 0 until diffArr.length()) {
-                val d = diffArr.optJSONObject(i) ?: continue
-                val code = d.optString("f12", "")
-                val name = d.optString("f14", "")
-                val rawPrice = d.optDouble("f2", 0.0)
-                val prevClose = d.optDouble("f18", 0.0)
-                val price = if (rawPrice > 0.0) rawPrice else prevClose
-                val chgPct = d.optDouble("f3", 0.0)
-                val chg = d.optDouble("f4", 0.0)
+            for (d in jsonObjects) {
+                val code = d.optString("f12", "").trim()
+                val name = d.optString("f14", "").trim()
+                if (code.isEmpty() || name.isEmpty() || name == "-") continue
 
-                if (code.isNotEmpty() && (price > 0.0 || rawPrice > 0.0 || prevClose > 0.0)) {
-                    val fullSymbol = when {
-                        code.startsWith("6") || code.startsWith("68") -> "$code.SS"
-                        code.startsWith("8") || code.startsWith("4") || code.startsWith("920") -> "$code.BJ"
-                        else -> "$code.SZ"
-                    }
-                    val isSuspended = rawPrice <= 0.0 && prevClose > 0.0
-                    val tag = when {
-                        isSuspended -> "停牌"
-                        chgPct >= 19.8 -> "20cm涨停"
-                        chgPct >= 9.8 -> "涨停领跑"
-                        chgPct >= 5.0 -> "多头主升"
-                        chgPct >= 0.0 -> "红盘趋势"
-                        else -> "高位蓄势"
-                    }
-                    val subDetail = "东财${clean}成分股"
-
-                    items.add(
-                        ThematicStockItem(
-                            symbol = fullSymbol,
-                            name = name,
-                            price = price,
-                            change = chg,
-                            changePercent = chgPct,
-                            boardCount = if (chgPct >= 9.8) 1 else null,
-                            tag = tag,
-                            subDetail = subDetail
-                        )
-                    )
+                val rawPrice = d.optDouble("f2", Double.NaN)
+                val prevClose = d.optDouble("f18", Double.NaN)
+                val price = when {
+                    !rawPrice.isNaN() && rawPrice > 0.0 -> rawPrice
+                    !prevClose.isNaN() && prevClose > 0.0 -> prevClose
+                    else -> 0.0
                 }
+                val rawChgPct = d.optDouble("f3", Double.NaN)
+                val chgPct = if (!rawChgPct.isNaN()) rawChgPct else 0.0
+                val rawChg = d.optDouble("f4", Double.NaN)
+                val chg = if (!rawChg.isNaN()) rawChg else 0.0
+
+                val fullSymbol = when {
+                    code.startsWith("6") || code.startsWith("68") -> "$code.SS"
+                    code.startsWith("8") || code.startsWith("4") || code.startsWith("920") -> "$code.BJ"
+                    else -> "$code.SZ"
+                }
+
+                // 100% client-side instant industry assignment
+                val apiIndName = d.optString("f100", "").trim().takeIf { it.isNotEmpty() && it != "-" }
+                val (indName, indBk) = when {
+                    apiIndName != null -> {
+                        val bk = StockIndustryRegistry.findBkCodeForIndustry(apiIndName)
+                        Pair(apiIndName, bk)
+                    }
+                    isIndustrySector -> Pair(defaultIndName, clean)
+                    else -> StockIndustryRegistry.resolveStockIndustryLocally(fullSymbol)
+                }
+
+                if (!indName.isNullOrEmpty() && !indBk.isNullOrEmpty()) {
+                    StockIndustryRegistry.cacheIndustry(code, indName, indBk)
+                }
+
+                val isSuspended = (rawPrice.isNaN() || rawPrice <= 0.0) && (!prevClose.isNaN() && prevClose > 0.0)
+                val tag = when {
+                    isSuspended -> "停牌"
+                    chgPct >= 19.8 -> "20cm涨停"
+                    chgPct >= 9.8 -> "涨停领跑"
+                    chgPct >= 5.0 -> "多头主升"
+                    chgPct >= 0.0 -> "红盘趋势"
+                    else -> "高位蓄势"
+                }
+                val subDetail = "东财${clean}成分股"
+
+                items.add(
+                    ThematicStockItem(
+                        symbol = fullSymbol,
+                        name = name,
+                        price = price,
+                        change = chg,
+                        changePercent = chgPct,
+                        boardCount = if (chgPct >= 9.8) 1 else null,
+                        tag = tag,
+                        subDetail = subDetail,
+                        industry = indName,
+                        industryBkCode = indBk,
+                        industryChangePercent = null
+                    )
+                )
             }
             return Pair(items, total)
         } catch (_: Exception) {
@@ -958,22 +965,22 @@ class StockRepository(
         val allItems = mutableListOf<ThematicStockItem>()
         var reportedTotal = 0
 
-        // Page 1 (pz=100)
-        val (page1Items, total) = fetchEastMoneySectorConstituentsPage(clean, page = 1, pageSize = 100)
+        // Page 1 (pz=500 fetches up to 500 stocks in 1 single fast request)
+        val (page1Items, total) = fetchEastMoneySectorConstituentsPage(clean, page = 1, pageSize = 500)
         allItems.addAll(page1Items)
         reportedTotal = total
 
-        // If total reported is greater than 100, fetch remaining pages
-        if (total > 100 && page1Items.isNotEmpty()) {
-            val totalPages = minOf((total + 99) / 100, (maxItems + 99) / 100)
+        // If total reported is greater than 500, fetch remaining pages
+        if (total > 500 && page1Items.isNotEmpty()) {
+            val totalPages = minOf((total + 499) / 500, (maxItems + 499) / 500)
             for (p in 2..totalPages) {
-                val (pageItems, _) = fetchEastMoneySectorConstituentsPage(clean, page = p, pageSize = 100)
+                val (pageItems, _) = fetchEastMoneySectorConstituentsPage(clean, page = p, pageSize = 500)
                 if (pageItems.isEmpty()) break
                 allItems.addAll(pageItems)
             }
         }
 
-        val finalTotal = if (reportedTotal > 0) reportedTotal else allItems.size
+        val finalTotal = if (reportedTotal > 0) maxOf(reportedTotal, allItems.size) else allItems.size
         return Pair(allItems, finalTotal)
     }
 
@@ -1363,7 +1370,7 @@ class StockRepository(
         val response = ApiClient.okHttpClient.newCall(request).execute()
         if (!response.isSuccessful) return null
         val text = response.body?.string() ?: return null
-        val match = Regex("""v_hint="([^"]*)"""").find(text) ?: return null
+        val match = Regex("v_hint=\"([^\"]*)\"").find(text) ?: return null
         val content = match.groupValues.getOrNull(1) ?: return null
         if (content.isEmpty() || content == "N") return null
 
@@ -1699,285 +1706,9 @@ class StockRepository(
     }
 
     companion object {
-        val EAST_MONEY_INDUSTRY_MAP = mapOf(
-            "半导体" to "BK1036",
-            "电子元件" to "BK0459",
-            "元件" to "BK0459",
-            "电子元器件" to "BK0459",
-            "消费电子" to "BK1037",
-            "计算机设备" to "BK0735",
-            "电子信息" to "BK0735",
-            "软件开发" to "BK0737",
-            "通信设备" to "BK0448",
-            "通讯行业" to "BK0448",
-            "通信服务" to "BK0736",
-            "光学光电子" to "BK1038",
-            "汽车整车" to "BK1029",
-            "汽车" to "BK1029",
-            "汽车零部件" to "BK0481",
-            "汽车服务" to "BK1016",
-            "电池" to "BK1033",
-            "光伏设备" to "BK1031",
-            "风电设备" to "BK1032",
-            "电网设备" to "BK0457",
-            "电力设备" to "BK0457",
-            "专用设备" to "BK0910",
-            "通用设备" to "BK0545",
-            "证券" to "BK0473",
-            "证券Ⅱ" to "BK0473",
-            "银行" to "BK0475",
-            "银行Ⅱ" to "BK0475",
-            "保险" to "BK0474",
-            "保险Ⅱ" to "BK0474",
-            "白酒" to "BK0896",
-            "酿酒行业" to "BK0477",
-            "食品饮料" to "BK0438",
-            "医疗器械" to "BK1041",
-            "化学制药" to "BK0465",
-            "中药" to "BK1040",
-            "中药Ⅱ" to "BK1040",
-            "生物制品" to "BK1044",
-            "医药商业" to "BK1042",
-            "环保行业" to "BK0728",
-            "环保" to "BK0728",
-            "游戏" to "BK1046",
-            "游戏Ⅱ" to "BK1046",
-            "互联网服务" to "BK0447",
-            "文化传媒" to "BK0486",
-            "煤炭行业" to "BK0437",
-            "煤炭" to "BK0437",
-            "石油行业" to "BK0438",
-            "有色金属" to "BK0478",
-            "能源金属" to "BK1015",
-            "贵金属" to "BK0732",
-            "钢铁行业" to "BK0479",
-            "钢铁" to "BK0479",
-            "电力行业" to "BK0428",
-            "电力" to "BK0428",
-            "房地产开发" to "BK0451",
-            "房地产服务" to "BK0452",
-            "航运港口" to "BK0450",
-            "航空机场" to "BK0420",
-            "物流行业" to "BK0422",
-            "铁路公路" to "BK0427",
-            "白色家电" to "BK1239",
-            "黑色家电" to "BK1241",
-            "家用电器" to "BK1239",
-            "装修建材" to "BK0476",
-            "家居用品" to "BK0476",
-            "水泥建材" to "BK0424",
-            "工程机械" to "BK0733",
-            "农牧饲渔" to "BK0433",
-            "纺织服装" to "BK0436",
-            "商业百货" to "BK0482",
-            "旅游酒店" to "BK0485",
-            "化学制品" to "BK0467",
-            "化肥行业" to "BK0468",
-            "农药兽药" to "BK0466",
-            "塑料制品" to "BK0429",
-            "橡胶制品" to "BK0430",
-            "美容护理" to "BK1045"
-        )
-
-        val SECTOR_NAME_MAP = mapOf(
-            "BK1638" to "最近多板",
-            "BK1050" to "昨日涨停-含一字",
-            "BK1715" to "趋势股",
-            "BK1675" to "历史新高",
-            "800005" to "A股平均股价",
-            "BK1036" to "半导体",
-            "BK0459" to "电子元件",
-            "BK1037" to "消费电子",
-            "BK0737" to "软件开发",
-            "BK0448" to "通信设备",
-            "BK0736" to "通信服务",
-            "BK0735" to "计算机设备",
-            "BK1038" to "光学光电子",
-            "BK1029" to "汽车整车",
-            "BK0481" to "汽车零部件",
-            "BK1016" to "汽车服务",
-            "BK1033" to "电池",
-            "BK1031" to "光伏设备",
-            "BK1032" to "风电设备",
-            "BK0457" to "电网设备",
-            "BK0910" to "专用设备",
-            "BK0545" to "通用设备",
-            "BK0473" to "证券",
-            "BK0475" to "银行",
-            "BK0474" to "保险",
-            "BK0896" to "白酒",
-            "BK0477" to "酿酒行业",
-            "BK0438" to "石油行业",
-            "BK1041" to "医疗器械",
-            "BK0465" to "化学制药",
-            "BK1040" to "中药",
-            "BK1044" to "生物制品",
-            "BK1042" to "医药商业",
-            "BK0728" to "环保行业",
-            "BK1046" to "游戏",
-            "BK0447" to "互联网服务",
-            "BK0486" to "文化传媒",
-            "BK0437" to "煤炭行业",
-            "BK0478" to "有色金属",
-            "BK1015" to "能源金属",
-            "BK0732" to "贵金属",
-            "BK0479" to "钢铁行业",
-            "BK0428" to "电力行业",
-            "BK0451" to "房地产开发",
-            "BK0452" to "房地产服务",
-            "BK0450" to "航运港口",
-            "BK0420" to "航空机场",
-            "BK0422" to "物流行业",
-            "BK0427" to "铁路公路",
-            "BK1239" to "白色家电",
-            "BK1241" to "黑色家电",
-            "BK0476" to "家居用品",
-            "BK0424" to "水泥建材",
-            "BK0733" to "工程机械",
-            "BK0433" to "农牧饲渔",
-            "BK0436" to "纺织服装",
-            "BK0482" to "商业百货",
-            "BK0485" to "旅游酒店",
-            "BK0467" to "化学制品",
-            "BK0468" to "化肥行业",
-            "BK0466" to "农药兽药",
-            "BK0429" to "塑料制品",
-            "BK0430" to "橡胶制品",
-            "BK1045" to "美容护理",
-            "BK1166" to "低空经济",
-            "BK1184" to "人形机器人",
-            "BK0854" to "华为概念"
-        )
-
-        val KNOWN_STOCK_INDUSTRIES = mapOf(
-            "002579" to Pair("电子元件", "BK0459"),
-            "600519" to Pair("白酒", "BK0896"),
-            "000858" to Pair("白酒", "BK0896"),
-            "000568" to Pair("白酒", "BK0896"),
-            "002304" to Pair("白酒", "BK0896"),
-            "600809" to Pair("白酒", "BK0896"),
-            "000799" to Pair("白酒", "BK0896"),
-            "603369" to Pair("白酒", "BK0896"),
-            "600779" to Pair("白酒", "BK0896"),
-            "600702" to Pair("白酒", "BK0896"),
-            "603589" to Pair("白酒", "BK0896"),
-            "300750" to Pair("电池", "BK1033"),
-            "002074" to Pair("电池", "BK1033"),
-            "300014" to Pair("电池", "BK1033"),
-            "300769" to Pair("电池", "BK1033"),
-            "002594" to Pair("汽车整车", "BK1029"),
-            "601127" to Pair("汽车整车", "BK1029"),
-            "600104" to Pair("汽车整车", "BK1029"),
-            "601238" to Pair("汽车整车", "BK1029"),
-            "601633" to Pair("汽车整车", "BK1029"),
-            "000625" to Pair("汽车整车", "BK1029"),
-            "600418" to Pair("汽车整车", "BK1029"),
-            "000550" to Pair("汽车整车", "BK1029"),
-            "600006" to Pair("汽车整车", "BK1029"),
-            "600741" to Pair("汽车零部件", "BK0481"),
-            "601799" to Pair("汽车零部件", "BK0481"),
-            "603786" to Pair("汽车零部件", "BK0481"),
-            "002050" to Pair("通用设备", "BK0545"),
-            "001696" to Pair("通用设备", "BK0545"),
-            "300059" to Pair("证券", "BK0473"),
-            "600030" to Pair("证券", "BK0473"),
-            "601211" to Pair("证券", "BK0473"),
-            "600999" to Pair("证券", "BK0473"),
-            "600958" to Pair("证券", "BK0473"),
-            "601688" to Pair("证券", "BK0473"),
-            "601788" to Pair("证券", "BK0473"),
-            "600036" to Pair("银行", "BK0475"),
-            "000001" to Pair("银行", "BK0475"),
-            "601398" to Pair("银行", "BK0475"),
-            "601939" to Pair("银行", "BK0475"),
-            "601288" to Pair("银行", "BK0475"),
-            "601988" to Pair("银行", "BK0475"),
-            "601166" to Pair("银行", "BK0475"),
-            "601328" to Pair("银行", "BK0475"),
-            "600016" to Pair("银行", "BK0475"),
-            "601318" to Pair("保险", "BK0474"),
-            "601628" to Pair("保险", "BK0474"),
-            "601601" to Pair("保险", "BK0474"),
-            "601319" to Pair("保险", "BK0474"),
-            "601336" to Pair("保险", "BK0474"),
-            "688981" to Pair("半导体", "BK1036"),
-            "688256" to Pair("半导体", "BK1036"),
-            "688041" to Pair("半导体", "BK1036"),
-            "688012" to Pair("半导体", "BK1036"),
-            "603501" to Pair("半导体", "BK1036"),
-            "688008" to Pair("半导体", "BK1036"),
-            "002049" to Pair("半导体", "BK1036"),
-            "002371" to Pair("半导体", "BK1036"),
-            "688126" to Pair("半导体", "BK1036"),
-            "300661" to Pair("半导体", "BK1036"),
-            "300782" to Pair("半导体", "BK1036"),
-            "300476" to Pair("电子元件", "BK0459"),
-            "002463" to Pair("电子元件", "BK0459"),
-            "002384" to Pair("电子元件", "BK0459"),
-            "002916" to Pair("电子元件", "BK0459"),
-            "300078" to Pair("电子元件", "BK0459"),
-            "002475" to Pair("消费电子", "BK1037"),
-            "002241" to Pair("消费电子", "BK1037"),
-            "688036" to Pair("消费电子", "BK1037"),
-            "002456" to Pair("光学光电子", "BK1038"),
-            "000536" to Pair("光学光电子", "BK1038"),
-            "000725" to Pair("光学光电子", "BK1038"),
-            "002583" to Pair("通信设备", "BK0448"),
-            "000063" to Pair("通信设备", "BK0448"),
-            "300308" to Pair("通信设备", "BK0448"),
-            "300502" to Pair("通信设备", "BK0448"),
-            "600498" to Pair("通信设备", "BK0448"),
-            "601138" to Pair("通信设备", "BK0448"),
-            "300085" to Pair("软件开发", "BK0737"),
-            "000158" to Pair("软件开发", "BK0737"),
-            "300339" to Pair("软件开发", "BK0737"),
-            "002261" to Pair("软件开发", "BK0737"),
-            "600588" to Pair("软件开发", "BK0737"),
-            "300033" to Pair("软件开发", "BK0737"),
-            "688111" to Pair("软件开发", "BK0737"),
-            "002130" to Pair("电网设备", "BK0457"),
-            "600406" to Pair("电网设备", "BK0457"),
-            "002851" to Pair("电网设备", "BK0457"),
-            "600292" to Pair("环保行业", "BK0728"),
-            "300757" to Pair("专用设备", "BK0910"),
-            "603106" to Pair("计算机设备", "BK0735"),
-            "002094" to Pair("美容护理", "BK1045"),
-            "603268" to Pair("家居用品", "BK0476"),
-            "300760" to Pair("医疗器械", "BK1041"),
-            "002223" to Pair("医疗器械", "BK1041"),
-            "600276" to Pair("化学制药", "BK0465"),
-            "000538" to Pair("中药", "BK1040"),
-            "600436" to Pair("片仔癀", "BK1040"),
-            "600900" to Pair("电力行业", "BK0428"),
-            "601088" to Pair("煤炭行业", "BK0437"),
-            "601857" to Pair("石油行业", "BK0438"),
-            "600028" to Pair("石油行业", "BK0438"),
-            "600938" to Pair("石油行业", "BK0438"),
-            "601899" to Pair("有色金属", "BK0478"),
-            "600111" to Pair("有色金属", "BK0478"),
-            "002460" to Pair("能源金属", "BK1015"),
-            "002466" to Pair("能源金属", "BK1015"),
-            "601919" to Pair("航运港口", "BK0450"),
-            "000002" to Pair("房地产开发", "BK0451"),
-            "600048" to Pair("房地产开发", "BK0451"),
-            "000651" to Pair("白色家电", "BK1239"),
-            "000333" to Pair("白色家电", "BK1239"),
-            "600690" to Pair("白色家电", "BK1239"),
-            "002602" to Pair("游戏", "BK1046"),
-            "300418" to Pair("游戏", "BK1046"),
-            "002555" to Pair("游戏", "BK1046"),
-            "300113" to Pair("游戏", "BK1046"),
-            "300459" to Pair("游戏", "BK1046"),
-            "601012" to Pair("光伏设备", "BK1031"),
-            "300274" to Pair("光伏设备", "BK1031"),
-            "600438" to Pair("光伏设备", "BK1031"),
-            "688599" to Pair("光伏设备", "BK1031"),
-            "688223" to Pair("光伏设备", "BK1031"),
-            "300017" to Pair("通信服务", "BK0736"),
-            "600050" to Pair("通信服务", "BK0736"),
-            "600941" to Pair("通信服务", "BK0736"),
-            "601728" to Pair("通信服务", "BK0736")
-        )
+        val EAST_MONEY_INDUSTRY_MAP get() = StockIndustryRegistry.EAST_MONEY_INDUSTRY_MAP
+        val SECTOR_NAME_MAP get() = StockIndustryRegistry.SECTOR_NAME_MAP
+        val KNOWN_STOCK_INDUSTRIES get() = StockIndustryRegistry.KNOWN_STOCK_INDUSTRIES
 
         val FALLBACK_INDICES = listOf(
             MarketIndex("000001.SS", "上证指数", 3830.45, 6.83, 0.18),
