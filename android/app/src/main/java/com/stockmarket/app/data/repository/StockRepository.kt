@@ -19,7 +19,7 @@ import kotlin.math.round
 import kotlin.math.sin
 
 class StockRepository(
-    private val preferences: WatchlistPreferences
+    val preferences: WatchlistPreferences
 ) {
     private val intradayBarsCache = java.util.concurrent.ConcurrentHashMap<String, Pair<Long, Map<String, List<CandlePoint>>>>()
 
