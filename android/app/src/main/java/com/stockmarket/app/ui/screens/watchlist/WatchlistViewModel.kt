@@ -2,11 +2,10 @@ package com.stockmarket.app.ui.screens.watchlist
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
-import com.stockmarket.app.data.model.MarketBreadth
+import com.stockmarket.app.data.local.WatchlistGroup
+import com.stockmarket.app.data.local.WatchlistPreferences
 import com.stockmarket.app.data.model.MarketIndex
 import com.stockmarket.app.data.model.StockQuote
-import com.stockmarket.app.data.model.ThematicSectorType
-import com.stockmarket.app.data.model.ThematicStockItem
 import com.stockmarket.app.data.repository.StockRepository
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -22,9 +21,8 @@ data class WatchlistUiState(
     val isRefreshing: Boolean = false,
     val quotes: List<StockQuote> = emptyList(),
     val indices: List<MarketIndex> = emptyList(),
-    val selectedThematicSector: ThematicSectorType = ThematicSectorType.MULTI_BOARD,
-    val thematicSectors: Map<ThematicSectorType, List<ThematicStockItem>> = emptyMap(),
-    val marketBreadth: MarketBreadth = MarketBreadth(),
+    val groups: List<WatchlistGroup> = emptyList(),
+    val selectedGroup: String = WatchlistPreferences.GROUP_ALL,
     val errorMessage: String? = null
 )
 
@@ -32,7 +30,13 @@ class WatchlistViewModel(
     private val repository: StockRepository
 ) : ViewModel() {
 
-    private val _uiState = MutableStateFlow(WatchlistUiState(isLoading = true))
+    private val _uiState = MutableStateFlow(
+        WatchlistUiState(
+            isLoading = true,
+            groups = repository.preferences.getGroups(),
+            selectedGroup = repository.preferences.getSelectedGroup()
+        )
+    )
     val uiState: StateFlow<WatchlistUiState> = _uiState.asStateFlow()
 
     private var autoRefreshJob: Job? = null
@@ -40,10 +44,63 @@ class WatchlistViewModel(
     init {
         loadData(isInitial = true)
         startAutoRefresh()
+
+        // Observe groups flow
+        viewModelScope.launch {
+            repository.preferences.groupsFlow.collect { groups ->
+                _uiState.update { it.copy(groups = groups) }
+            }
+        }
+        viewModelScope.launch {
+            repository.preferences.selectedGroupFlow.collect { sel ->
+                _uiState.update { it.copy(selectedGroup = sel) }
+            }
+        }
     }
 
-    fun selectThematicSector(type: ThematicSectorType) {
-        _uiState.update { it.copy(selectedThematicSector = type) }
+    fun selectGroup(groupName: String) {
+        repository.preferences.setSelectedGroup(groupName)
+        _uiState.update { it.copy(selectedGroup = groupName) }
+        loadData(isInitial = false)
+    }
+
+    fun createGroup(name: String): Boolean {
+        val success = repository.preferences.createGroup(name)
+        if (success) {
+            loadData(isInitial = false)
+        }
+        return success
+    }
+
+    fun deleteGroup(name: String): Boolean {
+        val success = repository.preferences.deleteGroup(name)
+        if (success) {
+            loadData(isInitial = false)
+        }
+        return success
+    }
+
+    fun renameGroup(oldName: String, newName: String): Boolean {
+        val success = repository.preferences.renameGroup(oldName, newName)
+        if (success) {
+            loadData(isInitial = false)
+        }
+        return success
+    }
+
+    fun moveSymbol(symbol: String, targetGroup: String): Boolean {
+        val success = repository.preferences.moveSymbolToGroup(symbol, targetGroup)
+        if (success) {
+            loadData(isInitial = false)
+        }
+        return success
+    }
+
+    fun removeSymbol(symbol: String) {
+        val currentGroup = _uiState.value.selectedGroup
+        val target = if (currentGroup == WatchlistPreferences.GROUP_ALL) null else currentGroup
+        repository.preferences.removeSymbolFromGroup(symbol, target)
+        loadData(isInitial = false)
     }
 
     fun loadData(isInitial: Boolean = false) {
@@ -54,10 +111,10 @@ class WatchlistViewModel(
                 _uiState.update { it.copy(isRefreshing = true, errorMessage = null) }
             }
 
-            val quotesResult = repository.getWatchlistQuotes()
+            val curGroup = repository.preferences.getSelectedGroup()
+            val symbols = repository.preferences.getSymbolsForGroup(curGroup)
+            val quotesResult = repository.getWatchlistQuotes(symbols)
             val indicesResult = repository.getMarketIndices()
-            val thematicResult = repository.getThematicSectors()
-            val breadthResult = repository.getMarketBreadth()
 
             _uiState.update { state ->
                 state.copy(
@@ -65,24 +122,19 @@ class WatchlistViewModel(
                     isRefreshing = false,
                     quotes = quotesResult.getOrDefault(emptyList()),
                     indices = indicesResult.getOrDefault(emptyList()),
-                    thematicSectors = thematicResult.getOrDefault(emptyMap()),
-                    marketBreadth = breadthResult.getOrDefault(MarketBreadth()),
+                    groups = repository.preferences.getGroups(),
+                    selectedGroup = curGroup,
                     errorMessage = null
                 )
             }
         }
     }
 
-    fun removeSymbol(symbol: String) {
-        repository.toggleWatchlist(symbol)
-        loadData(isInitial = false)
-    }
-
     private fun startAutoRefresh() {
         autoRefreshJob?.cancel()
         autoRefreshJob = viewModelScope.launch {
             while (isActive) {
-                delay(20_000) // auto-refresh every 20s
+                delay(15_000) // auto-refresh every 15s
                 loadData(isInitial = false)
             }
         }

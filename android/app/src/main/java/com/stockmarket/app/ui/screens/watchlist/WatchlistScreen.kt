@@ -10,40 +10,43 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.DriveFileMove
+import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Settings
-import androidx.compose.material.icons.filled.Whatshot
+import androidx.compose.material.icons.filled.Tune
 import androidx.compose.material3.*
-import androidx.compose.runtime.Composable
-import androidx.compose.runtime.collectAsState
-import androidx.compose.runtime.getValue
+import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import com.stockmarket.app.data.model.MarketBreadth
-import com.stockmarket.app.data.model.ThematicSectorType
-import com.stockmarket.app.data.model.ThematicStockItem
+import com.stockmarket.app.data.local.WatchlistGroup
+import com.stockmarket.app.data.local.WatchlistPreferences
 import com.stockmarket.app.ui.components.MarketIndexCard
 import com.stockmarket.app.ui.components.StockCard
 import com.stockmarket.app.ui.theme.*
-import java.util.Locale
-import kotlin.math.max
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun WatchlistScreen(
     viewModel: WatchlistViewModel,
     onStockClick: (String) -> Unit,
+    onSectorClick: (String, String) -> Unit,
     onSearchClick: () -> Unit,
     onSettingsClick: () -> Unit
 ) {
     val state by viewModel.uiState.collectAsState()
+
+    var showCreateGroupDialog by remember { mutableStateOf(false) }
+    var showManageGroupsDialog by remember { mutableStateOf(false) }
+    var newGroupName by remember { mutableStateOf("") }
+    var createGroupError by remember { mutableStateOf<String?>(null) }
 
     Scaffold(
         topBar = {
@@ -145,35 +148,120 @@ fun WatchlistScreen(
                     }
                 }
 
-                // 2. Thematic Sectors Section (行情特色板块: 最近多板, 昨日涨停-含一字, 趋势股, 历史新高, A股平均股价)
+                // 2. Watchlist Groups Bar (自选分组导航栏)
                 item {
-                    ThematicSectorsSection(
-                        selectedSector = state.selectedThematicSector,
-                        thematicSectors = state.thematicSectors,
-                        marketBreadth = state.marketBreadth,
-                        onSectorSelected = { viewModel.selectThematicSector(it) },
-                        onStockClick = onStockClick
-                    )
+                    Column(modifier = Modifier.fillMaxWidth().padding(top = 4.dp, bottom = 8.dp)) {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 16.dp, vertical = 6.dp),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text(
+                                text = "自选分组",
+                                color = TextSecondary,
+                                fontSize = 13.sp,
+                                fontWeight = FontWeight.SemiBold
+                            )
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                TextButton(
+                                    onClick = { showManageGroupsDialog = true },
+                                    contentPadding = PaddingValues(horizontal = 6.dp, vertical = 0.dp)
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Default.Tune,
+                                        contentDescription = "管理分组",
+                                        tint = PrimaryBlue,
+                                        modifier = Modifier.size(15.dp)
+                                    )
+                                    Spacer(modifier = Modifier.width(3.dp))
+                                    Text("管理", fontSize = 12.sp, color = PrimaryBlue)
+                                }
+                            }
+                        }
+
+                        // Scrollable Group Tabs Row
+                        LazyRow(
+                            contentPadding = PaddingValues(horizontal = 16.dp),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            // "全部" Tab
+                            val isAllSelected = state.selectedGroup == WatchlistPreferences.GROUP_ALL
+                            val totalCount = state.groups.flatMap { it.symbols }.distinct().size
+                            item {
+                                GroupTabPill(
+                                    title = WatchlistPreferences.GROUP_ALL,
+                                    count = totalCount,
+                                    isSelected = isAllSelected,
+                                    onClick = { viewModel.selectGroup(WatchlistPreferences.GROUP_ALL) }
+                                )
+                            }
+
+                            // Dynamic Group Tabs
+                            items(state.groups, key = { it.name }) { group ->
+                                val isSelected = state.selectedGroup == group.name
+                                GroupTabPill(
+                                    title = group.name,
+                                    count = group.symbols.size,
+                                    isSelected = isSelected,
+                                    onClick = { viewModel.selectGroup(group.name) }
+                                )
+                            }
+
+                            // "+ 新建分组" Button
+                            item {
+                                Row(
+                                    modifier = Modifier
+                                        .clip(RoundedCornerShape(16.dp))
+                                        .background(SurfaceBorder.copy(alpha = 0.4f))
+                                        .border(1.dp, SurfaceBorder, RoundedCornerShape(16.dp))
+                                        .clickable {
+                                            newGroupName = ""
+                                            createGroupError = null
+                                            showCreateGroupDialog = true
+                                        }
+                                        .padding(horizontal = 10.dp, vertical = 6.dp),
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Default.Add,
+                                        contentDescription = "新建分组",
+                                        tint = PrimaryBlue,
+                                        modifier = Modifier.size(15.dp)
+                                    )
+                                    Spacer(modifier = Modifier.width(3.dp))
+                                    Text(
+                                        text = "新建分组",
+                                        color = PrimaryBlue,
+                                        fontSize = 12.sp,
+                                        fontWeight = FontWeight.Medium
+                                    )
+                                }
+                            }
+                        }
+                    }
                 }
 
-                // 3. Watchlist Section Header (我的自选)
+                // 3. Section Status Row
                 item {
                     Row(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .padding(horizontal = 16.dp, vertical = 10.dp),
+                            .padding(horizontal = 16.dp, vertical = 6.dp),
                         horizontalArrangement = Arrangement.SpaceBetween,
                         verticalAlignment = Alignment.CenterVertically
                     ) {
                         Text(
-                            text = "我的自选 (${state.quotes.size})",
+                            text = "${state.selectedGroup} (${state.quotes.size})",
                             color = TextPrimary,
-                            fontSize = 16.sp,
+                            fontSize = 15.sp,
                             fontWeight = FontWeight.Bold
                         )
                         if (state.isRefreshing) {
                             Text(
-                                text = "正在刷新...",
+                                text = "正在刷新行情...",
                                 color = PrimaryBlue,
                                 fontSize = 12.sp
                             )
@@ -181,7 +269,7 @@ fun WatchlistScreen(
                     }
                 }
 
-                // 4. Watchlist Stock Cards
+                // 4. Watchlist Items (Stocks and Sectors)
                 if (state.quotes.isEmpty()) {
                     item {
                         Box(
@@ -192,14 +280,14 @@ fun WatchlistScreen(
                         ) {
                             Column(horizontalAlignment = Alignment.CenterHorizontally) {
                                 Text(
-                                    text = "自选列表为空",
+                                    text = if (state.selectedGroup == WatchlistPreferences.GROUP_ALL) "自选列表为空" else "「${state.selectedGroup}」分组暂无内容",
                                     color = TextSecondary,
                                     fontSize = 16.sp,
                                     fontWeight = FontWeight.Medium
                                 )
                                 Spacer(modifier = Modifier.height(6.dp))
                                 Text(
-                                    text = "点击下方按钮或右上角搜索图标添加股票",
+                                    text = "搜索股票或特色板块并加入自选",
                                     color = TextMuted,
                                     fontSize = 13.sp
                                 )
@@ -210,17 +298,24 @@ fun WatchlistScreen(
                                 ) {
                                     Icon(imageVector = Icons.Default.Add, contentDescription = null)
                                     Spacer(modifier = Modifier.width(6.dp))
-                                    Text("添加自选股票")
+                                    Text("添加股票/板块")
                                 }
                             }
                         }
                     }
                 } else {
                     items(state.quotes, key = { it.symbol }) { quote ->
+                        val isSector = quote.symbol.startsWith("BK")
                         Box(modifier = Modifier.padding(horizontal = 16.dp, vertical = 5.dp)) {
                             StockCard(
                                 quote = quote,
-                                onClick = { onStockClick(quote.symbol) },
+                                onClick = {
+                                    if (isSector) {
+                                        onSectorClick(quote.symbol, quote.name)
+                                    } else {
+                                        onStockClick(quote.symbol)
+                                    }
+                                },
                                 onRemove = { viewModel.removeSymbol(quote.symbol) }
                             )
                         }
@@ -229,443 +324,174 @@ fun WatchlistScreen(
             }
         }
     }
-}
 
-@Composable
-private fun ThematicSectorsSection(
-    selectedSector: ThematicSectorType,
-    thematicSectors: Map<ThematicSectorType, List<ThematicStockItem>>,
-    marketBreadth: MarketBreadth,
-    onSectorSelected: (ThematicSectorType) -> Unit,
-    onStockClick: (String) -> Unit
-) {
-    val stockColors = LocalStockColors.current
-
-    Column(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(horizontal = 16.dp, vertical = 6.dp)
-            .clip(RoundedCornerShape(12.dp))
-            .background(EastMoneySurface)
-            .border(1.dp, EastMoneyBorder, RoundedCornerShape(12.dp))
-            .padding(12.dp)
-    ) {
-        // Section Header
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Icon(
-                    imageVector = Icons.Default.Whatshot,
-                    contentDescription = null,
-                    tint = EastMoneyOrange,
-                    modifier = Modifier.size(16.dp)
-                )
-                Spacer(modifier = Modifier.width(5.dp))
-                Text(
-                    text = "行情特色板块",
-                    fontSize = 14.sp,
-                    fontWeight = FontWeight.Bold,
-                    color = TextPrimary
-                )
-            }
-            Text(
-                text = "超短主线雷达",
-                fontSize = 11.sp,
-                color = EastMoneyOrange,
-                fontWeight = FontWeight.SemiBold
-            )
-        }
-
-        Spacer(modifier = Modifier.height(10.dp))
-
-        // Sector Pill Tabs
-        LazyRow(
-            horizontalArrangement = Arrangement.spacedBy(8.dp)
-        ) {
-            items(ThematicSectorType.values()) { type ->
-                val isSelected = type == selectedSector
-                Box(
-                    modifier = Modifier
-                        .clip(RoundedCornerShape(6.dp))
-                        .background(if (isSelected) EastMoneyRed else EastMoneyCard)
-                        .border(
-                            1.dp,
-                            if (isSelected) EastMoneyRed else EastMoneyBorder,
-                            RoundedCornerShape(6.dp)
-                        )
-                        .clickable { onSectorSelected(type) }
-                        .padding(horizontal = 10.dp, vertical = 5.dp)
-                ) {
-                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                        Text(
-                            text = type.title,
-                            fontSize = 12.sp,
-                            fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium,
-                            color = if (isSelected) Color.White else TextSecondary
-                        )
-                        Text(
-                            text = type.bkCode,
-                            fontSize = 9.sp,
-                            fontWeight = FontWeight.SemiBold,
-                            color = if (isSelected) Color.White.copy(alpha = 0.85f) else TextMuted
-                        )
+    // --- Dialog: Create New Group ---
+    if (showCreateGroupDialog) {
+        AlertDialog(
+            onDismissRequest = { showCreateGroupDialog = false },
+            title = {
+                Text("新建自选分组", color = TextPrimary, fontSize = 17.sp, fontWeight = FontWeight.Bold)
+            },
+            text = {
+                Column {
+                    Text("输入分组名称 (如: 核心科技、短线接力、我的板块):", color = TextSecondary, fontSize = 13.sp)
+                    Spacer(modifier = Modifier.height(8.dp))
+                    OutlinedTextField(
+                        value = newGroupName,
+                        onValueChange = {
+                            newGroupName = it
+                            createGroupError = null
+                        },
+                        singleLine = true,
+                        placeholder = { Text("分组名称", color = TextMuted, fontSize = 14.sp) },
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                    if (createGroupError != null) {
+                        Spacer(modifier = Modifier.height(6.dp))
+                        Text(text = createGroupError!!, color = Color(0xFFEF4444), fontSize = 12.sp)
                     }
                 }
-            }
-        }
-
-        Spacer(modifier = Modifier.height(10.dp))
-
-        // Sector Brief Description
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .clip(RoundedCornerShape(6.dp))
-                .background(EastMoneyCard.copy(alpha = 0.6f))
-                .padding(horizontal = 8.dp, vertical = 6.dp),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Text(
-                text = "📌 ${selectedSector.desc}",
-                fontSize = 11.sp,
-                color = TextSecondary
-            )
-        }
-
-        Spacer(modifier = Modifier.height(10.dp))
-
-        // Sector Content
-        if (selectedSector == ThematicSectorType.AVERAGE_PRICE) {
-            MarketBreadthCard(breadth = marketBreadth, stockColors = stockColors)
-        } else {
-            val stocks = thematicSectors[selectedSector] ?: emptyList()
-            if (stocks.isEmpty()) {
-                Box(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(vertical = 20.dp),
-                    contentAlignment = Alignment.Center
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        val clean = newGroupName.trim()
+                        if (clean.isEmpty()) {
+                            createGroupError = "分组名称不能为空"
+                        } else if (clean == WatchlistPreferences.GROUP_ALL) {
+                            createGroupError = "不能使用系统保留名称"
+                        } else {
+                            val success = viewModel.createGroup(clean)
+                            if (success) {
+                                showCreateGroupDialog = false
+                            } else {
+                                createGroupError = "该分组已存在"
+                            }
+                        }
+                    },
+                    colors = ButtonDefaults.buttonColors(containerColor = PrimaryBlue)
                 ) {
-                    CircularProgressIndicator(
-                        color = EastMoneyOrange,
-                        modifier = Modifier.size(24.dp),
-                        strokeWidth = 2.dp
-                    )
+                    Text("创建")
                 }
-            } else {
-                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    stocks.forEachIndexed { index, item ->
-                        ThematicStockItemRow(
-                            item = item,
-                            stockColors = stockColors,
-                            onClick = { onStockClick(item.symbol) }
-                        )
-                        if (index < stocks.size - 1) {
-                            HorizontalDivider(
-                                color = EastMoneyBorder.copy(alpha = 0.4f),
-                                thickness = 0.5.dp
-                            )
+            },
+            dismissButton = {
+                TextButton(onClick = { showCreateGroupDialog = false }) {
+                    Text("取消", color = TextSecondary)
+                }
+            },
+            containerColor = SurfaceCard
+        )
+    }
+
+    // --- Dialog: Manage Groups ---
+    if (showManageGroupsDialog) {
+        AlertDialog(
+            onDismissRequest = { showManageGroupsDialog = false },
+            title = {
+                Text("自选分组管理", color = TextPrimary, fontSize = 17.sp, fontWeight = FontWeight.Bold)
+            },
+            text = {
+                Column(modifier = Modifier.fillMaxWidth()) {
+                    Text("默认分组不可删除，自定义分组可随时增删：", color = TextMuted, fontSize = 12.sp)
+                    Spacer(modifier = Modifier.height(10.dp))
+                    LazyColumn(
+                        modifier = Modifier.heightIn(max = 280.dp),
+                        verticalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        items(state.groups, key = { it.name }) { group ->
+                            val canDelete = group.name != WatchlistPreferences.GROUP_DEFAULT
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clip(RoundedCornerShape(8.dp))
+                                    .background(SurfaceDark)
+                                    .padding(horizontal = 12.dp, vertical = 8.dp),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Column {
+                                    Text(
+                                        text = group.name,
+                                        color = TextPrimary,
+                                        fontSize = 14.sp,
+                                        fontWeight = FontWeight.SemiBold
+                                    )
+                                    Text(
+                                        text = "${group.symbols.size} 个股票/板块",
+                                        color = TextMuted,
+                                        fontSize = 11.sp
+                                    )
+                                }
+                                if (canDelete) {
+                                    IconButton(
+                                        onClick = { viewModel.deleteGroup(group.name) },
+                                        modifier = Modifier.size(32.dp)
+                                    ) {
+                                        Icon(
+                                            imageVector = Icons.Default.Delete,
+                                            contentDescription = "删除分组",
+                                            tint = Color(0xFFEF4444),
+                                            modifier = Modifier.size(18.dp)
+                                        )
+                                    }
+                                } else {
+                                    Text(
+                                        text = "默认",
+                                        color = TextMuted,
+                                        fontSize = 11.sp,
+                                        modifier = Modifier.padding(end = 6.dp)
+                                    )
+                                }
+                            }
                         }
                     }
                 }
-            }
-        }
+            },
+            confirmButton = {
+                Button(
+                    onClick = { showManageGroupsDialog = false },
+                    colors = ButtonDefaults.buttonColors(containerColor = PrimaryBlue)
+                ) {
+                    Text("完成")
+                }
+            },
+            containerColor = SurfaceCard
+        )
     }
 }
 
 @Composable
-private fun MarketBreadthCard(
-    breadth: MarketBreadth,
-    stockColors: StockColors
-) {
-    Column(
-        modifier = Modifier
-            .fillMaxWidth()
-            .clip(RoundedCornerShape(8.dp))
-            .background(EastMoneyCard)
-            .border(1.dp, EastMoneyBorder, RoundedCornerShape(8.dp))
-            .padding(12.dp)
-    ) {
-        // Average Price & Turnover
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Column {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text(
-                        text = "全A平均股价",
-                        fontSize = 11.sp,
-                        color = TextSecondary
-                    )
-                    Spacer(modifier = Modifier.width(4.dp))
-                    Box(
-                        modifier = Modifier
-                            .clip(RoundedCornerShape(2.dp))
-                            .background(EastMoneyOrange.copy(alpha = 0.2f))
-                            .padding(horizontal = 3.dp, vertical = 1.dp)
-                    ) {
-                        Text("全市场均价", fontSize = 9.sp, color = EastMoneyOrange, fontWeight = FontWeight.Bold)
-                    }
-                }
-                Spacer(modifier = Modifier.height(2.dp))
-                Row(verticalAlignment = Alignment.Bottom) {
-                    val isUp = breadth.change >= 0
-                    val color = if (isUp) stockColors.upColor else stockColors.downColor
-                    val prefix = if (isUp) "+" else ""
-                    Text(
-                        text = "¥${String.format(Locale.US, "%.2f", breadth.averagePrice)}",
-                        fontSize = 20.sp,
-                        fontWeight = FontWeight.Bold,
-                        color = color
-                    )
-                    Spacer(modifier = Modifier.width(6.dp))
-                    Text(
-                        text = "$prefix${String.format(Locale.US, "%.2f", breadth.change)}",
-                        fontSize = 12.sp,
-                        fontWeight = FontWeight.SemiBold,
-                        color = color
-                    )
-                    Spacer(modifier = Modifier.width(4.dp))
-                    Text(
-                        text = "($prefix${String.format(Locale.US, "%.2f%%", breadth.changePercent)})",
-                        fontSize = 12.sp,
-                        fontWeight = FontWeight.SemiBold,
-                        color = color
-                    )
-                }
-            }
-
-            Column(horizontalAlignment = Alignment.End) {
-                Text(
-                    text = "两市总成交额",
-                    fontSize = 11.sp,
-                    color = TextSecondary
-                )
-                Spacer(modifier = Modifier.height(2.dp))
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text(
-                        text = breadth.totalTurnover,
-                        fontSize = 16.sp,
-                        fontWeight = FontWeight.Bold,
-                        color = TextPrimary
-                    )
-                    Spacer(modifier = Modifier.width(4.dp))
-                    Text(
-                        text = breadth.turnoverChange,
-                        fontSize = 11.sp,
-                        color = if (breadth.turnoverChange.startsWith("+")) stockColors.upColor else stockColors.downColor,
-                        fontWeight = FontWeight.Medium
-                    )
-                }
-            }
-        }
-
-        Spacer(modifier = Modifier.height(12.dp))
-
-        // Market Breadth Progress Bar
-        val total = max(1, breadth.upCount + breadth.downCount + breadth.flatCount).toFloat()
-        val upWeight = (breadth.upCount / total).coerceIn(0.05f, 0.90f)
-        val flatWeight = (breadth.flatCount / total).coerceIn(0.02f, 0.20f)
-        val downWeight = (breadth.downCount / total).coerceIn(0.05f, 0.90f)
-
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .height(8.dp)
-                .clip(RoundedCornerShape(4.dp))
-        ) {
-            Box(
-                modifier = Modifier
-                    .weight(upWeight)
-                    .fillMaxHeight()
-                    .background(stockColors.upColor)
-            )
-            Box(
-                modifier = Modifier
-                    .weight(flatWeight)
-                    .fillMaxHeight()
-                    .background(Color.Gray.copy(alpha = 0.5f))
-            )
-            Box(
-                modifier = Modifier
-                    .weight(downWeight)
-                    .fillMaxHeight()
-                    .background(stockColors.downColor)
-            )
-        }
-
-        Spacer(modifier = Modifier.height(6.dp))
-
-        // Breadth counts
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Text(
-                text = "上涨 ${breadth.upCount}",
-                fontSize = 11.sp,
-                fontWeight = FontWeight.SemiBold,
-                color = stockColors.upColor
-            )
-            Text(
-                text = "平盘 ${breadth.flatCount}",
-                fontSize = 11.sp,
-                color = TextMuted
-            )
-            Text(
-                text = "下跌 ${breadth.downCount}",
-                fontSize = 11.sp,
-                fontWeight = FontWeight.SemiBold,
-                color = stockColors.downColor
-            )
-        }
-
-        Spacer(modifier = Modifier.height(10.dp))
-
-        // Sentiment & Limit Counts Row
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                Box(
-                    modifier = Modifier
-                        .clip(RoundedCornerShape(4.dp))
-                        .background(stockColors.upColor.copy(alpha = 0.15f))
-                        .padding(horizontal = 6.dp, vertical = 3.dp)
-                ) {
-                    Text(
-                        text = "涨停 ${breadth.limitUpCount}",
-                        fontSize = 10.sp,
-                        fontWeight = FontWeight.Bold,
-                        color = stockColors.upColor
-                    )
-                }
-                Box(
-                    modifier = Modifier
-                        .clip(RoundedCornerShape(4.dp))
-                        .background(stockColors.downColor.copy(alpha = 0.15f))
-                        .padding(horizontal = 6.dp, vertical = 3.dp)
-                ) {
-                    Text(
-                        text = "跌停 ${breadth.limitDownCount}",
-                        fontSize = 10.sp,
-                        fontWeight = FontWeight.Bold,
-                        color = stockColors.downColor
-                    )
-                }
-            }
-
-            Box(
-                modifier = Modifier
-                    .clip(RoundedCornerShape(4.dp))
-                    .background(EastMoneyYellow.copy(alpha = 0.15f))
-                    .padding(horizontal = 6.dp, vertical = 3.dp)
-            ) {
-                Text(
-                    text = "${breadth.sentimentScore}分 · ${breadth.sentimentLabel}",
-                    fontSize = 10.sp,
-                    fontWeight = FontWeight.Bold,
-                    color = EastMoneyYellow
-                )
-            }
-        }
-    }
-}
-
-@Composable
-private fun ThematicStockItemRow(
-    item: ThematicStockItem,
-    stockColors: StockColors,
+private fun GroupTabPill(
+    title: String,
+    count: Int,
+    isSelected: Boolean,
     onClick: () -> Unit
 ) {
-    val isUp = item.change >= 0
-    val color = if (isUp) stockColors.upColor else stockColors.downColor
-    val prefix = if (isUp) "+" else ""
-
-    Row(
+    Box(
         modifier = Modifier
-            .fillMaxWidth()
+            .clip(RoundedCornerShape(16.dp))
+            .background(if (isSelected) PrimaryBlue else SurfaceCard)
+            .border(
+                width = 1.dp,
+                color = if (isSelected) PrimaryBlue else SurfaceBorder,
+                shape = RoundedCornerShape(16.dp)
+            )
             .clickable(onClick = onClick)
-            .padding(vertical = 4.dp),
-        horizontalArrangement = Arrangement.SpaceBetween,
-        verticalAlignment = Alignment.CenterVertically
+            .padding(horizontal = 12.dp, vertical = 6.dp)
     ) {
-        // Left Column: Name, Tag, Symbol, Theme Subdetail
-        Column(modifier = Modifier.weight(1f)) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Text(
-                    text = item.name,
-                    fontSize = 14.sp,
-                    fontWeight = FontWeight.Bold,
-                    color = TextPrimary
-                )
-                Spacer(modifier = Modifier.width(6.dp))
-                val tagBg = if (item.boardCount != null) EastMoneyOrange else SurfaceBorder
-                Box(
-                    modifier = Modifier
-                        .clip(RoundedCornerShape(3.dp))
-                        .background(tagBg)
-                        .padding(horizontal = 4.dp, vertical = 1.dp)
-                ) {
-                    Text(
-                        text = item.tag,
-                        fontSize = 9.sp,
-                        fontWeight = FontWeight.Bold,
-                        color = Color.White
-                    )
-                }
-            }
-            Spacer(modifier = Modifier.height(2.dp))
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Text(
-                    text = item.symbol,
-                    fontSize = 11.sp,
-                    color = TextMuted
-                )
-                Spacer(modifier = Modifier.width(6.dp))
-                Text(
-                    text = item.subDetail,
-                    fontSize = 11.sp,
-                    color = TextSecondary,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis
-                )
-            }
-        }
-
-        Spacer(modifier = Modifier.width(12.dp))
-
-        // Right Column: Price & Change Percent Button
         Row(verticalAlignment = Alignment.CenterVertically) {
             Text(
-                text = String.format(Locale.US, "%.2f", item.price),
-                fontSize = 14.sp,
-                fontWeight = FontWeight.Bold,
-                color = color
+                text = title,
+                fontSize = 13.sp,
+                fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal,
+                color = if (isSelected) Color.White else TextSecondary
             )
-            Spacer(modifier = Modifier.width(10.dp))
-            Box(
-                modifier = Modifier
-                    .size(width = 68.dp, height = 26.dp)
-                    .clip(RoundedCornerShape(4.dp))
-                    .background(color),
-                contentAlignment = Alignment.Center
-            ) {
-                Text(
-                    text = "$prefix${String.format(Locale.US, "%.2f%%", item.changePercent)}",
-                    fontSize = 11.sp,
-                    fontWeight = FontWeight.Bold,
-                    color = Color.White
-                )
-            }
+            Spacer(modifier = Modifier.width(4.dp))
+            Text(
+                text = "($count)",
+                fontSize = 11.sp,
+                color = if (isSelected) Color.White.copy(alpha = 0.85f) else TextMuted
+            )
         }
     }
 }

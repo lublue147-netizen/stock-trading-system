@@ -25,40 +25,152 @@ class StockRepository(
 
     private fun getService() = ApiClient.getService(preferences.getServerUrl())
 
-    suspend fun getWatchlistQuotes(): Result<List<StockQuote>> = withContext(Dispatchers.IO) {
-        val symbols = preferences.getWatchlistSymbols().toList()
+    fun getSectorName(bkCode: String): String {
+        return when (bkCode.trim().uppercase()) {
+            "BK1638" -> "最近多板"
+            "BK1050" -> "昨日涨停-含一字"
+            "BK1715" -> "趋势股"
+            "BK1675" -> "历史新高"
+            "BK1036" -> "半导体"
+            "BK1166" -> "低空经济"
+            "BK1184" -> "人形机器人"
+            "BK0854" -> "华为概念"
+            "800005" -> "A股平均股价"
+            else -> bkCode
+        }
+    }
+
+    fun fetchDirectEastMoneySectorQuotes(sectorCodes: List<String>): List<StockQuote>? {
+        if (sectorCodes.isEmpty()) return emptyList()
+        try {
+            val secids = sectorCodes.joinToString(",") {
+                val clean = it.trim().uppercase()
+                if (clean.startsWith("BK")) "90.$clean" else "90.BK$clean"
+            }
+            val url = "https://push2.eastmoney.com/api/qt/ulist.np/get?secids=$secids&fields=f12,f14,f2,f3,f4,f5,f6,f7,f15,f16,f17,f18&fltt=2&invt=2"
+            val request = Request.Builder()
+                .url(url)
+                .header("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64)")
+                .header("Referer", "https://quote.eastmoney.com/")
+                .build()
+
+            val response = ApiClient.okHttpClient.newCall(request).execute()
+            if (!response.isSuccessful) return null
+            val bodyStr = response.body?.string() ?: return null
+            val rootObj = JSONObject(bodyStr)
+            val dataObj = rootObj.optJSONObject("data") ?: return null
+            val diffArr = dataObj.optJSONArray("diff") ?: return null
+
+            val list = mutableListOf<StockQuote>()
+            for (i in 0 until diffArr.length()) {
+                val d = diffArr.optJSONObject(i) ?: continue
+                val code = d.optString("f12", "")
+                val name = d.optString("f14", "")
+                val price = d.optDouble("f2", 0.0)
+                val chgPct = d.optDouble("f3", 0.0)
+                val chg = d.optDouble("f4", 0.0)
+                val vol = d.optLong("f5", 0L)
+                val turnover = d.optDouble("f6", 0.0)
+                val turnoverRate = d.optDouble("f7", 0.0)
+                val high = d.optDouble("f15", price)
+                val low = d.optDouble("f16", price)
+                val open = d.optDouble("f17", price)
+                val preClose = d.optDouble("f18", price)
+
+                if (code.isNotEmpty()) {
+                    list.add(
+                        StockQuote(
+                            symbol = code,
+                            name = if (name.isNotEmpty()) name else getSectorName(code),
+                            price = price,
+                            change = chg,
+                            changePercent = chgPct,
+                            currency = "点",
+                            exchange = "板块",
+                            open = open,
+                            high = high,
+                            low = low,
+                            previousClose = preClose,
+                            volume = vol,
+                            turnoverAmount = turnover,
+                            turnoverRate = turnoverRate
+                        )
+                    )
+                }
+            }
+            return list
+        } catch (_: Exception) {
+            return null
+        }
+    }
+
+    suspend fun getWatchlistQuotes(customSymbols: List<String>? = null): Result<List<StockQuote>> = withContext(Dispatchers.IO) {
+        val symbols = customSymbols ?: preferences.getSymbolsForGroup(preferences.getSelectedGroup())
         if (symbols.isEmpty()) {
             return@withContext Result.success(emptyList())
         }
 
-        // 1. Primary Engine: Direct Tencent Finance live batch query (Domestic high-speed, 100% genuine)
-        try {
-            fetchDirectTencentQuotes(symbols)?.let { quotes ->
-                if (quotes.isNotEmpty()) {
-                    return@withContext Result.success(quotes)
-                }
+        val stockSymbols = symbols.filter { !it.startsWith("BK") }
+        val sectorSymbols = symbols.filter { it.startsWith("BK") }
+
+        val stockQuotes = if (stockSymbols.isNotEmpty()) {
+            try {
+                fetchDirectTencentQuotes(stockSymbols) ?: emptyList()
+            } catch (_: Exception) {
+                emptyList()
             }
-        } catch (e: Exception) {
-            // continue to secondary
+        } else emptyList()
+
+        val sectorQuotes = if (sectorSymbols.isNotEmpty()) {
+            try {
+                fetchDirectEastMoneySectorQuotes(sectorSymbols) ?: emptyList()
+            } catch (_: Exception) {
+                emptyList()
+            }
+        } else emptyList()
+
+        val quoteMap = (stockQuotes + sectorQuotes).associateBy { it.symbol.uppercase() }
+
+        val combined = symbols.map { sym ->
+            quoteMap[sym.uppercase()] ?: if (sym.startsWith("BK")) {
+                StockQuote(
+                    symbol = sym,
+                    name = getSectorName(sym),
+                    price = 2000.0,
+                    change = 0.0,
+                    changePercent = 0.0,
+                    currency = "点",
+                    exchange = "板块"
+                )
+            } else {
+                createFallbackQuote(sym)
+            }
         }
 
-        // 2. Secondary Engine: Configured Cloudflare Worker API
-        try {
-            val joined = symbols.joinToString(",")
-            val quotes = getService().getQuotes(joined)
-            if (quotes.isNotEmpty()) {
-                return@withContext Result.success(quotes)
-            }
-        } catch (e: Exception) {
-            // continue to fallback
-        }
-
-        // 3. High-Fidelity Fallback
-        val fallbackQuotes = symbols.map { createFallbackQuote(it) }
-        Result.success(fallbackQuotes)
+        Result.success(combined)
     }
 
     suspend fun getStockQuote(symbol: String): Result<StockQuote> = withContext(Dispatchers.IO) {
+        val clean = symbol.trim().uppercase()
+        if (clean.startsWith("BK")) {
+            try {
+                fetchDirectEastMoneySectorQuotes(listOf(clean))?.firstOrNull()?.let {
+                    return@withContext Result.success(it)
+                }
+            } catch (_: Exception) {}
+            return@withContext Result.success(
+                StockQuote(
+                    symbol = clean,
+                    name = getSectorName(clean),
+                    price = 2000.0,
+                    change = 0.0,
+                    changePercent = 0.0,
+                    currency = "点",
+                    exchange = "板块"
+                )
+            )
+        }
+
         // 1. Primary Engine: Direct Tencent Finance live feed
         try {
             fetchDirectTencentQuote(symbol)?.let { quote ->
@@ -123,19 +235,99 @@ class StockRepository(
         Result.success(createFallbackHistory(symbol, range))
     }
 
+    data class SectorDetailResult(
+        val quote: StockQuote,
+        val constituents: List<ThematicStockItem>,
+        val totalCount: Int
+    )
+
+    suspend fun getSectorDetail(bkCode: String): Result<SectorDetailResult> = withContext(Dispatchers.IO) {
+        val clean = bkCode.trim().uppercase()
+        val quote = fetchDirectEastMoneySectorQuotes(listOf(clean))?.firstOrNull() ?: StockQuote(
+            symbol = clean,
+            name = getSectorName(clean),
+            price = 2000.0,
+            change = 0.0,
+            changePercent = 0.0,
+            currency = "点",
+            exchange = "板块"
+        )
+        val constituents = fetchEastMoneySectorConstituents(clean, limit = 100)
+        Result.success(SectorDetailResult(quote, constituents, constituents.size))
+    }
+
+    private fun fetchEastMoneySuggest(query: String): List<SearchResult>? {
+        try {
+            val encoded = java.net.URLEncoder.encode(query.trim(), "UTF-8")
+            val url = "https://searchapi.eastmoney.com/api/suggest/get?input=$encoded&type=14"
+            val request = Request.Builder()
+                .url(url)
+                .header("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64)")
+                .build()
+
+            val response = ApiClient.okHttpClient.newCall(request).execute()
+            if (!response.isSuccessful) return null
+            val bodyStr = response.body?.string() ?: return null
+            val rootObj = JSONObject(bodyStr)
+            val qTable = rootObj.optJSONObject("QuotationCodeTable") ?: return null
+            val dataArr = qTable.optJSONArray("Data") ?: return null
+
+            val results = mutableListOf<SearchResult>()
+            for (i in 0 until dataArr.length()) {
+                val item = dataArr.optJSONObject(i) ?: continue
+                val code = item.optString("Code", "")
+                val name = item.optString("Name", "")
+                val classify = item.optString("Classify", "")
+                val secTypeName = item.optString("SecurityTypeName", "")
+
+                if (classify == "BK" || secTypeName == "板块") {
+                    results.add(
+                        SearchResult(
+                            symbol = code,
+                            name = name,
+                            exchange = "板块",
+                            type = "SECTOR"
+                        )
+                    )
+                } else if (classify == "AStock" || setOf("沪A", "深A", "京A").contains(secTypeName)) {
+                    val suffix = when {
+                        code.startsWith("6") || code.startsWith("68") -> "SS"
+                        code.startsWith("8") || code.startsWith("4") || code.startsWith("920") -> "BJ"
+                        else -> "SZ"
+                    }
+                    val ex = when (suffix) {
+                        "SS" -> "上交所"
+                        "BJ" -> "北交所"
+                        else -> "深交所"
+                    }
+                    results.add(
+                        SearchResult(
+                            symbol = "$code.$suffix",
+                            name = name,
+                            exchange = ex,
+                            type = "EQUITY"
+                        )
+                    )
+                }
+            }
+            return if (results.isNotEmpty()) results else null
+        } catch (_: Exception) {
+            return null
+        }
+    }
+
     suspend fun searchStocks(query: String): Result<List<SearchResult>> = withContext(Dispatchers.IO) {
         val cleanQ = query.trim()
         if (cleanQ.isEmpty()) return@withContext Result.success(emptyList())
 
-        // 1. Primary Engine: Cloudflare Worker API (queries EastMoney & Tencent Smartbox)
+        // 1. Primary Engine: Direct East Money Suggest (Stocks & BK Sectors)
         try {
-            val results = getService().searchStocks(cleanQ)
-            if (results.isNotEmpty()) {
-                return@withContext Result.success(results)
+            fetchEastMoneySuggest(cleanQ)?.let { results ->
+                if (results.isNotEmpty()) {
+                    return@withContext Result.success(results)
+                }
             }
-        } catch (e: Exception) {
-            // continue to direct Tencent Smartbox
-        }
+        } catch (_: Exception) {}
 
         // 2. Secondary Engine: Direct Tencent Smartbox API
         try {
@@ -144,14 +336,38 @@ class StockRepository(
                     return@withContext Result.success(results)
                 }
             }
-        } catch (e: Exception) {
-            // continue to local
-        }
+        } catch (e: Exception) {}
 
-        // 3. Local Dictionary and Regex Matching
+        // 3. Third Engine: Configured Cloudflare Worker API
+        try {
+            val results = getService().searchStocks(cleanQ)
+            if (results.isNotEmpty()) {
+                return@withContext Result.success(results)
+            }
+        } catch (e: Exception) {}
+
+        // 4. Local Dictionary and Regex Matching
         val filtered = FALLBACK_SEARCH.filter {
             it.symbol.contains(cleanQ, ignoreCase = true) || it.name.contains(cleanQ, ignoreCase = true)
         }.toMutableList()
+
+        // Check common sector codes locally
+        val knownSectors = listOf(
+            SearchResult("BK1638", "最近多板", "板块", "SECTOR"),
+            SearchResult("BK1050", "昨日涨停_含一字", "板块", "SECTOR"),
+            SearchResult("BK1715", "趋势股", "板块", "SECTOR"),
+            SearchResult("BK1675", "历史新高", "板块", "SECTOR"),
+            SearchResult("BK1036", "半导体", "板块", "SECTOR"),
+            SearchResult("BK1166", "低空经济", "板块", "SECTOR"),
+            SearchResult("BK1184", "人形机器人", "板块", "SECTOR")
+        )
+        for (sec in knownSectors) {
+            if (sec.symbol.contains(cleanQ, ignoreCase = true) || sec.name.contains(cleanQ, ignoreCase = true)) {
+                if (filtered.none { it.symbol == sec.symbol }) {
+                    filtered.add(0, sec)
+                }
+            }
+        }
 
         if (cleanQ.matches(Regex("^[0-9]{6}$"))) {
             val suffix = if (cleanQ.startsWith("6")) ".SS" else if (cleanQ.startsWith("8") || cleanQ.startsWith("4")) ".BJ" else ".SZ"
@@ -206,12 +422,12 @@ class StockRepository(
 
     fun isWatchlisted(symbol: String): Boolean = preferences.isInWatchlist(symbol)
 
-    fun toggleWatchlist(symbol: String): Boolean {
+    fun toggleWatchlist(symbol: String, groupName: String? = null): Boolean {
         return if (preferences.isInWatchlist(symbol)) {
-            preferences.removeSymbol(symbol)
+            preferences.removeSymbolFromGroup(symbol, groupName)
             false
         } else {
-            preferences.addSymbol(symbol)
+            preferences.addSymbolToGroup(symbol, groupName)
             true
         }
     }
@@ -424,6 +640,7 @@ class StockRepository(
         val clean = symbol.trim().uppercase()
         val code = clean.substringBefore(".")
         return when {
+            clean.startsWith("BK") -> "90.$clean"
             clean == "000001.SS" || clean == "SH000001" -> "1.000001"
             clean == "399001.SZ" || clean == "SZ399001" -> "0.399001"
             clean == "399006.SZ" || clean == "SZ399006" -> "0.399006"

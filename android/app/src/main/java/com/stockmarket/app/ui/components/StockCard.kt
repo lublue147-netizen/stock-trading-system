@@ -1,6 +1,7 @@
 package com.stockmarket.app.ui.components
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -11,6 +12,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -29,6 +31,7 @@ fun StockCard(
     val isPositive = quote.change >= 0
     val color = if (isPositive) stockColors.upColor else stockColors.downColor
     val prefix = if (isPositive) "+" else ""
+    val isSector = quote.symbol.startsWith("BK")
 
     Card(
         modifier = modifier
@@ -56,19 +59,24 @@ fun StockCard(
                         fontSize = 17.sp,
                         fontWeight = FontWeight.Bold
                     )
-                    if (quote.exchange.isNotEmpty()) {
+                    if (quote.exchange.isNotEmpty() || isSector) {
                         Spacer(modifier = Modifier.width(6.dp))
                         Box(
                             modifier = Modifier
                                 .clip(RoundedCornerShape(4.dp))
-                                .background(SurfaceBorder)
+                                .background(if (isSector) EastMoneyOrange.copy(alpha = 0.2f) else SurfaceBorder)
+                                .border(
+                                    width = if (isSector) 0.8.dp else 0.dp,
+                                    color = if (isSector) EastMoneyOrange.copy(alpha = 0.7f) else Color.Transparent,
+                                    shape = RoundedCornerShape(4.dp)
+                                )
                                 .padding(horizontal = 5.dp, vertical = 2.dp)
                         ) {
                             Text(
-                                text = quote.exchange,
-                                color = TextSecondary,
+                                text = if (isSector) "板块" else quote.exchange,
+                                color = if (isSector) EastMoneyOrange else TextSecondary,
                                 fontSize = 10.sp,
-                                fontWeight = FontWeight.Medium
+                                fontWeight = FontWeight.SemiBold
                             )
                         }
                     }
@@ -88,10 +96,10 @@ fun StockCard(
                 horizontalArrangement = Arrangement.spacedBy(10.dp)
             ) {
                 Column(horizontalAlignment = Alignment.End) {
-                    val currSign = when (quote.currency) {
-                        "CNY" -> "¥"
-                        "HKD" -> "HK$"
-                        "点" -> ""
+                    val currSign = when {
+                        isSector || quote.currency == "点" -> ""
+                        quote.currency == "CNY" -> "¥"
+                        quote.currency == "HKD" -> "HK$"
                         else -> "$"
                     }
                     Text(

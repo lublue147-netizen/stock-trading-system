@@ -1,6 +1,7 @@
 package com.stockmarket.app.ui.screens.search
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
@@ -12,7 +13,6 @@ import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Clear
-import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.*
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
@@ -27,11 +27,24 @@ import androidx.compose.ui.unit.sp
 import com.stockmarket.app.data.model.SearchResult
 import com.stockmarket.app.ui.theme.*
 
+private val POPULAR_RECOMMENDATIONS = listOf(
+    SearchResult("BK1638", "最近多板", "板块", "SECTOR"),
+    SearchResult("BK1050", "昨日涨停_含一字", "板块", "SECTOR"),
+    SearchResult("BK1715", "趋势股", "板块", "SECTOR"),
+    SearchResult("BK1036", "半导体", "板块", "SECTOR"),
+    SearchResult("BK1166", "低空经济", "板块", "SECTOR"),
+    SearchResult("002579.SZ", "中京电子", "深交所", "EQUITY"),
+    SearchResult("600519.SS", "贵州茅台", "上交所", "EQUITY"),
+    SearchResult("300750.SZ", "宁德时代", "深交所", "EQUITY"),
+    SearchResult("002594.SZ", "比亚迪", "深交所", "EQUITY")
+)
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun SearchScreen(
     viewModel: SearchViewModel,
     onStockClick: (String) -> Unit,
+    onSectorClick: (String, String) -> Unit,
     onBack: () -> Unit
 ) {
     val state by viewModel.uiState.collectAsState()
@@ -43,7 +56,7 @@ fun SearchScreen(
                     TextField(
                         value = state.query,
                         onValueChange = { viewModel.onQueryChange(it) },
-                        placeholder = { Text("输入A股代码/拼音/名称 (如 002579, zjdz, 中京电子)", fontSize = 14.sp, color = TextMuted) },
+                        placeholder = { Text("输入股票/板块代码或名称 (如 BK1638, 最近多板, 半导体, 002579)", fontSize = 13.sp, color = TextMuted) },
                         singleLine = true,
                         colors = TextFieldDefaults.colors(
                             focusedContainerColor = Color.Transparent,
@@ -84,28 +97,34 @@ fun SearchScreen(
                 .fillMaxSize()
                 .padding(paddingValues)
         ) {
-            // Trending stocks chip list
+            // Trending stocks & sectors chip recommendations
             Column(modifier = Modifier.padding(16.dp)) {
                 Text(
-                    text = "热门股票推荐",
+                    text = "热门推荐 (包含特色板块与精选个股)",
                     color = TextSecondary,
                     fontSize = 13.sp,
                     fontWeight = FontWeight.SemiBold
                 )
                 Spacer(modifier = Modifier.height(10.dp))
                 LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    items(state.trendingStocks.take(8)) { item ->
-                        val shortCode = item.symbol.substringBefore('.')
+                    items(POPULAR_RECOMMENDATIONS) { item ->
+                        val isSector = item.type == "SECTOR" || item.symbol.startsWith("BK")
                         SuggestionChip(
-                            onClick = { viewModel.onQueryChange(shortCode) },
-                            label = { Text("${item.name} ($shortCode)", fontSize = 12.sp) },
+                            onClick = { viewModel.onQueryChange(if (isSector) item.symbol else item.symbol.substringBefore('.')) },
+                            label = {
+                                Text(
+                                    text = if (isSector) "【板块】${item.name}" else "${item.name} (${item.symbol.substringBefore('.')})",
+                                    fontSize = 12.sp,
+                                    color = if (isSector) EastMoneyOrange else TextPrimary
+                                )
+                            },
                             colors = SuggestionChipDefaults.suggestionChipColors(
                                 containerColor = SurfaceCard,
                                 labelColor = TextPrimary
                             ),
                             border = SuggestionChipDefaults.suggestionChipBorder(
                                 enabled = true,
-                                borderColor = SurfaceBorder
+                                borderColor = if (isSector) EastMoneyOrange.copy(alpha = 0.5f) else SurfaceBorder
                             )
                         )
                     }
@@ -125,7 +144,7 @@ fun SearchScreen(
                     CircularProgressIndicator(color = PrimaryBlue)
                 }
             } else {
-                val displayList = if (state.results.isNotEmpty()) state.results else if (state.query.isEmpty()) state.trendingStocks else emptyList()
+                val displayList = if (state.results.isNotEmpty()) state.results else if (state.query.isEmpty()) POPULAR_RECOMMENDATIONS else emptyList()
 
                 if (displayList.isEmpty() && state.query.isNotEmpty()) {
                     Box(
@@ -134,7 +153,7 @@ fun SearchScreen(
                             .padding(48.dp),
                         contentAlignment = Alignment.Center
                     ) {
-                        Text("未找到相关股票", color = TextSecondary, fontSize = 14.sp)
+                        Text("未找到相关股票或板块", color = TextSecondary, fontSize = 14.sp)
                     }
                 } else {
                     LazyColumn(
@@ -143,10 +162,18 @@ fun SearchScreen(
                         verticalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
                         items(displayList) { stock ->
+                            val isSector = stock.type == "SECTOR" || stock.symbol.startsWith("BK")
                             SearchResultItem(
                                 stock = stock,
+                                isSector = isSector,
                                 isWatchlisted = viewModel.isWatchlisted(stock.symbol),
-                                onStockClick = { onStockClick(stock.symbol) },
+                                onClick = {
+                                    if (isSector) {
+                                        onSectorClick(stock.symbol, stock.name)
+                                    } else {
+                                        onStockClick(stock.symbol)
+                                    }
+                                },
                                 onToggleWatchlist = { viewModel.toggleWatchlist(stock.symbol) }
                             )
                         }
@@ -160,15 +187,16 @@ fun SearchScreen(
 @Composable
 private fun SearchResultItem(
     stock: SearchResult,
+    isSector: Boolean,
     isWatchlisted: Boolean,
-    onStockClick: () -> Unit,
+    onClick: () -> Unit,
     onToggleWatchlist: () -> Unit
 ) {
     Card(
         modifier = Modifier
             .fillMaxWidth()
             .clip(RoundedCornerShape(10.dp))
-            .clickable(onClick = onStockClick),
+            .clickable(onClick = onClick),
         colors = CardDefaults.cardColors(containerColor = SurfaceCard),
         shape = RoundedCornerShape(10.dp)
     ) {
@@ -187,20 +215,24 @@ private fun SearchResultItem(
                         fontSize = 16.sp,
                         fontWeight = FontWeight.Bold
                     )
-                    if (stock.exchange.isNotEmpty()) {
-                        Spacer(modifier = Modifier.width(6.dp))
-                        Box(
-                            modifier = Modifier
-                                .clip(RoundedCornerShape(4.dp))
-                                .background(SurfaceBorder)
-                                .padding(horizontal = 4.dp, vertical = 2.dp)
-                        ) {
-                            Text(
-                                text = stock.exchange,
-                                color = TextSecondary,
-                                fontSize = 10.sp
+                    Spacer(modifier = Modifier.width(6.dp))
+                    Box(
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(4.dp))
+                            .background(if (isSector) EastMoneyOrange.copy(alpha = 0.2f) else SurfaceBorder)
+                            .border(
+                                width = if (isSector) 0.8.dp else 0.dp,
+                                color = if (isSector) EastMoneyOrange.copy(alpha = 0.7f) else Color.Transparent,
+                                shape = RoundedCornerShape(4.dp)
                             )
-                        }
+                            .padding(horizontal = 4.dp, vertical = 2.dp)
+                    ) {
+                        Text(
+                            text = if (isSector) "板块" else stock.exchange,
+                            color = if (isSector) EastMoneyOrange else TextSecondary,
+                            fontSize = 10.sp,
+                            fontWeight = FontWeight.SemiBold
+                        )
                     }
                 }
                 Spacer(modifier = Modifier.height(2.dp))
