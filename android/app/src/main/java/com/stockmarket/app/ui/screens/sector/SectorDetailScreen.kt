@@ -32,6 +32,17 @@ import com.stockmarket.app.ui.components.ChartType
 import com.stockmarket.app.ui.theme.*
 import java.util.Locale
 
+enum class SectorSortField {
+    NAME_CODE,
+    PRICE,
+    CHANGE_PERCENT
+}
+
+enum class SectorSortOrder {
+    ASCENDING,
+    DESCENDING
+}
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun SectorDetailScreen(
@@ -46,6 +57,38 @@ fun SectorDetailScreen(
     val isUp = (quote?.change ?: 0.0) >= 0.0
     val quoteColor = if (isUp) stockColors.upColor else stockColors.downColor
     val prefix = if (isUp) "+" else ""
+
+    var sortField by remember { mutableStateOf(SectorSortField.CHANGE_PERCENT) }
+    var sortOrder by remember { mutableStateOf(SectorSortOrder.DESCENDING) }
+
+    val sortedConstituents = remember(state.constituents, sortField, sortOrder) {
+        val distinct = state.constituents.distinctBy { it.symbol }
+        when (sortField) {
+            SectorSortField.CHANGE_PERCENT -> {
+                if (sortOrder == SectorSortOrder.DESCENDING) {
+                    distinct.sortedWith(compareByDescending<ThematicStockItem> { it.changePercent }.thenBy { it.symbol })
+                } else {
+                    distinct.sortedWith(compareBy<ThematicStockItem> { it.changePercent }.thenBy { it.symbol })
+                }
+            }
+            SectorSortField.PRICE -> {
+                if (sortOrder == SectorSortOrder.DESCENDING) {
+                    distinct.sortedWith(compareByDescending<ThematicStockItem> { it.price }.thenBy { it.symbol })
+                } else {
+                    distinct.sortedWith(compareBy<ThematicStockItem> { it.price }.thenBy { it.symbol })
+                }
+            }
+            SectorSortField.NAME_CODE -> {
+                if (sortOrder == SectorSortOrder.ASCENDING) {
+                    distinct.sortedBy { it.symbol }
+                } else {
+                    distinct.sortedByDescending { it.symbol }
+                }
+            }
+        }
+    }
+
+    val totalDisplay = if (state.totalConstituents > 0) state.totalConstituents else sortedConstituents.size
 
     Scaffold(
         topBar = {
@@ -204,7 +247,7 @@ fun SectorDetailScreen(
                                 val turnoverStr = formatAmount(q.turnoverAmount)
                                 MetricCell("成交额", turnoverStr)
                                 MetricCell("换手率", String.format(Locale.US, "%.2f%%", q.turnoverRate))
-                                MetricCell("成分股", "${state.constituents.size} 只")
+                                MetricCell("成分股", "$totalDisplay 只")
                                 MetricCell("市场类型", "A股板块")
                             }
                         }
@@ -260,16 +303,30 @@ fun SectorDetailScreen(
                                 )
                                 Spacer(modifier = Modifier.width(6.dp))
                                 Text(
-                                    text = "(共 ${state.constituents.size} 只)",
+                                    text = "(共 $totalDisplay 只)",
                                     color = TextMuted,
                                     fontSize = 12.sp
                                 )
                             }
-                            Text(
-                                text = "按涨跌幅降序",
-                                color = TextSecondary,
-                                fontSize = 11.sp
-                            )
+                            val sortLabel = when (sortField) {
+                                SectorSortField.CHANGE_PERCENT -> if (sortOrder == SectorSortOrder.DESCENDING) "按涨跌幅降序" else "按涨跌幅升序"
+                                SectorSortField.PRICE -> if (sortOrder == SectorSortOrder.DESCENDING) "按最新价降序" else "按最新价升序"
+                                SectorSortField.NAME_CODE -> if (sortOrder == SectorSortOrder.ASCENDING) "按代码升序" else "按代码降序"
+                            }
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Text(
+                                    text = sortLabel,
+                                    color = PrimaryBlue,
+                                    fontSize = 11.sp,
+                                    fontWeight = FontWeight.Medium
+                                )
+                                Spacer(modifier = Modifier.width(3.dp))
+                                Text(
+                                    text = "(点击表头切换)",
+                                    color = TextMuted,
+                                    fontSize = 10.sp
+                                )
+                            }
                         }
 
                         // Column headers
@@ -280,16 +337,64 @@ fun SectorDetailScreen(
                                 .padding(horizontal = 16.dp, vertical = 6.dp),
                             verticalAlignment = Alignment.CenterVertically
                         ) {
-                            Text(text = "股票名称 / 代码", color = TextMuted, fontSize = 11.sp, modifier = Modifier.weight(1.3f))
-                            Text(text = "最新价", color = TextMuted, fontSize = 11.sp, modifier = Modifier.weight(0.9f), textAlign = TextAlign.End)
-                            Text(text = "涨跌幅", color = TextMuted, fontSize = 11.sp, modifier = Modifier.weight(0.9f), textAlign = TextAlign.End)
-                            Text(text = "加自选", color = TextMuted, fontSize = 11.sp, modifier = Modifier.weight(0.5f), textAlign = TextAlign.End)
+                            SortableHeaderCell(
+                                title = "股票名称 / 代码",
+                                isSelected = sortField == SectorSortField.NAME_CODE,
+                                sortOrder = sortOrder,
+                                modifier = Modifier.weight(1.3f),
+                                alignment = Alignment.Start,
+                                onClick = {
+                                    if (sortField == SectorSortField.NAME_CODE) {
+                                        sortOrder = if (sortOrder == SectorSortOrder.ASCENDING) SectorSortOrder.DESCENDING else SectorSortOrder.ASCENDING
+                                    } else {
+                                        sortField = SectorSortField.NAME_CODE
+                                        sortOrder = SectorSortOrder.ASCENDING
+                                    }
+                                }
+                            )
+                            SortableHeaderCell(
+                                title = "最新价",
+                                isSelected = sortField == SectorSortField.PRICE,
+                                sortOrder = sortOrder,
+                                modifier = Modifier.weight(0.9f),
+                                alignment = Alignment.End,
+                                onClick = {
+                                    if (sortField == SectorSortField.PRICE) {
+                                        sortOrder = if (sortOrder == SectorSortOrder.DESCENDING) SectorSortOrder.ASCENDING else SectorSortOrder.DESCENDING
+                                    } else {
+                                        sortField = SectorSortField.PRICE
+                                        sortOrder = SectorSortOrder.DESCENDING
+                                    }
+                                }
+                            )
+                            SortableHeaderCell(
+                                title = "涨跌幅",
+                                isSelected = sortField == SectorSortField.CHANGE_PERCENT,
+                                sortOrder = sortOrder,
+                                modifier = Modifier.weight(0.9f),
+                                alignment = Alignment.End,
+                                onClick = {
+                                    if (sortField == SectorSortField.CHANGE_PERCENT) {
+                                        sortOrder = if (sortOrder == SectorSortOrder.DESCENDING) SectorSortOrder.ASCENDING else SectorSortOrder.DESCENDING
+                                    } else {
+                                        sortField = SectorSortField.CHANGE_PERCENT
+                                        sortOrder = SectorSortOrder.DESCENDING
+                                    }
+                                }
+                            )
+                            Text(
+                                text = "加自选",
+                                color = TextMuted,
+                                fontSize = 11.sp,
+                                modifier = Modifier.weight(0.5f),
+                                textAlign = TextAlign.End
+                            )
                         }
                     }
                 }
 
                 // 4. Constituent Stock Items
-                if (state.constituents.isEmpty()) {
+                if (sortedConstituents.isEmpty()) {
                     item {
                         Box(
                             modifier = Modifier
@@ -301,8 +406,7 @@ fun SectorDetailScreen(
                         }
                     }
                 } else {
-                    val distinctConstituents = state.constituents.distinctBy { it.symbol }
-                    itemsIndexed(distinctConstituents, key = { _, stock -> stock.symbol }) { index, stock ->
+                    itemsIndexed(sortedConstituents, key = { _, stock -> stock.symbol }) { index, stock ->
                         ConstituentStockRow(
                             rank = index + 1,
                             stock = stock,
@@ -470,3 +574,44 @@ private fun formatAmount(amount: Double): String {
         else -> "--"
     }
 }
+
+@Composable
+private fun SortableHeaderCell(
+    title: String,
+    isSelected: Boolean,
+    sortOrder: SectorSortOrder,
+    modifier: Modifier = Modifier,
+    alignment: Alignment.Horizontal = Alignment.Start,
+    onClick: () -> Unit
+) {
+    val activeColor = PrimaryBlue
+    val textColor = if (isSelected) activeColor else TextMuted
+    val arrowText = if (isSelected) {
+        if (sortOrder == SectorSortOrder.ASCENDING) " ▲" else " ▼"
+    } else {
+        " ⇅"
+    }
+
+    Row(
+        modifier = modifier
+            .clip(RoundedCornerShape(4.dp))
+            .clickable(onClick = onClick)
+            .padding(vertical = 4.dp),
+        horizontalArrangement = if (alignment == Alignment.End) Arrangement.End else Arrangement.Start,
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Text(
+            text = title,
+            color = textColor,
+            fontSize = 11.sp,
+            fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal
+        )
+        Text(
+            text = arrowText,
+            color = if (isSelected) activeColor else TextSecondary.copy(alpha = 0.4f),
+            fontSize = if (isSelected) 10.sp else 9.sp,
+            fontWeight = FontWeight.Bold
+        )
+    }
+}
+

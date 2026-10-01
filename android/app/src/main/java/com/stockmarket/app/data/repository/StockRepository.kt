@@ -252,8 +252,29 @@ class StockRepository(
             currency = "点",
             exchange = "板块"
         )
-        val constituents = fetchEastMoneySectorConstituents(clean, limit = 100)
-        Result.success(SectorDetailResult(quote, constituents, constituents.size))
+        val (constituents, totalCount) = fetchEastMoneySectorConstituentsFull(clean, maxItems = 1500)
+        val finalConstituents = if (constituents.isNotEmpty()) {
+            constituents
+        } else {
+            // Fallback to local definitions if any
+            val defType = ThematicSectorType.values().firstOrNull { it.bkCode == clean }
+            if (defType != null) {
+                THEMATIC_STOCK_DEFS.filter { it.sectorType == defType }.map { def ->
+                    ThematicStockItem(
+                        symbol = def.symbol,
+                        name = def.defaultName,
+                        price = 10.0,
+                        change = 0.0,
+                        changePercent = 0.0,
+                        boardCount = def.boardCount,
+                        tag = def.tag,
+                        subDetail = def.subDetail
+                    )
+                }
+            } else emptyList()
+        }
+        val finalTotal = if (totalCount > 0) maxOf(totalCount, finalConstituents.size) else finalConstituents.size
+        Result.success(SectorDetailResult(quote, finalConstituents, finalTotal))
     }
 
     private fun fetchEastMoneySuggest(query: String): List<SearchResult>? {
@@ -713,60 +734,102 @@ class StockRepository(
         )
     }
 
-    private fun fetchEastMoneySectorConstituents(bkCode: String, limit: Int = 15): List<ThematicStockItem> {
-        val url = "https://push2.eastmoney.com/api/qt/clist/get?pn=1&pz=$limit&po=1&np=1&fltt=2&invt=2&fid=f3&fs=b:$bkCode&fields=f12,f14,f2,f3,f4,f5,f6,f7,f15,f16,f17,f18"
-        val request = Request.Builder()
-            .url(url)
-            .header("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64)")
-            .header("Referer", "https://quote.eastmoney.com/")
-            .build()
+    private fun fetchEastMoneySectorConstituentsPage(
+        bkCode: String,
+        page: Int = 1,
+        pageSize: Int = 100
+    ): Pair<List<ThematicStockItem>, Int> {
+        val clean = bkCode.trim().uppercase()
+        val url = "https://push2.eastmoney.com/api/qt/clist/get?pn=$page&pz=$pageSize&po=1&np=1&ut=bd1d9ddb04089700cf9c27f6f7426281&fltt=2&invt=2&fid=f3&fs=b:$clean&fields=f12,f14,f2,f3,f4,f5,f6,f7,f15,f16,f17,f18"
+        try {
+            val request = Request.Builder()
+                .url(url)
+                .header("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
+                .header("Referer", "https://quote.eastmoney.com/")
+                .build()
 
-        val response = ApiClient.okHttpClient.newCall(request).execute()
-        if (!response.isSuccessful) return emptyList()
-        val bodyStr = response.body?.string() ?: return emptyList()
-        val rootObj = JSONObject(bodyStr)
-        val dataObj = rootObj.optJSONObject("data") ?: return emptyList()
-        val diffArr = dataObj.optJSONArray("diff") ?: return emptyList()
+            val response = ApiClient.okHttpClient.newCall(request).execute()
+            if (!response.isSuccessful) return Pair(emptyList(), 0)
+            val bodyStr = response.body?.string()?.trim()?.removePrefix("\uFEFF") ?: return Pair(emptyList(), 0)
+            val rootObj = JSONObject(bodyStr)
+            val dataObj = rootObj.optJSONObject("data") ?: return Pair(emptyList(), 0)
+            val total = dataObj.optInt("total", 0)
+            val diffArr = dataObj.optJSONArray("diff") ?: return Pair(emptyList(), total)
 
-        val items = mutableListOf<ThematicStockItem>()
-        for (i in 0 until diffArr.length()) {
-            val d = diffArr.optJSONObject(i) ?: continue
-            val code = d.optString("f12", "")
-            val name = d.optString("f14", "")
-            val price = d.optDouble("f2", 0.0)
-            val chgPct = d.optDouble("f3", 0.0)
-            val chg = d.optDouble("f4", 0.0)
+            val items = mutableListOf<ThematicStockItem>()
+            for (i in 0 until diffArr.length()) {
+                val d = diffArr.optJSONObject(i) ?: continue
+                val code = d.optString("f12", "")
+                val name = d.optString("f14", "")
+                val rawPrice = d.optDouble("f2", 0.0)
+                val prevClose = d.optDouble("f18", 0.0)
+                val price = if (rawPrice > 0.0) rawPrice else prevClose
+                val chgPct = d.optDouble("f3", 0.0)
+                val chg = d.optDouble("f4", 0.0)
 
-            if (code.isNotEmpty() && price > 0.0) {
-                val fullSymbol = when {
-                    code.startsWith("6") || code.startsWith("68") -> "$code.SS"
-                    code.startsWith("8") || code.startsWith("4") || code.startsWith("920") -> "$code.BJ"
-                    else -> "$code.SZ"
-                }
-                val tag = when {
-                    chgPct >= 19.8 -> "20cm涨停"
-                    chgPct >= 9.8 -> "涨停领跑"
-                    chgPct >= 5.0 -> "多头主升"
-                    chgPct >= 0.0 -> "红盘趋势"
-                    else -> "高位蓄势"
-                }
-                val subDetail = "东财${bkCode}成分股"
+                if (code.isNotEmpty() && (price > 0.0 || rawPrice > 0.0 || prevClose > 0.0)) {
+                    val fullSymbol = when {
+                        code.startsWith("6") || code.startsWith("68") -> "$code.SS"
+                        code.startsWith("8") || code.startsWith("4") || code.startsWith("920") -> "$code.BJ"
+                        else -> "$code.SZ"
+                    }
+                    val isSuspended = rawPrice <= 0.0 && prevClose > 0.0
+                    val tag = when {
+                        isSuspended -> "停牌"
+                        chgPct >= 19.8 -> "20cm涨停"
+                        chgPct >= 9.8 -> "涨停领跑"
+                        chgPct >= 5.0 -> "多头主升"
+                        chgPct >= 0.0 -> "红盘趋势"
+                        else -> "高位蓄势"
+                    }
+                    val subDetail = "东财${clean}成分股"
 
-                items.add(
-                    ThematicStockItem(
-                        symbol = fullSymbol,
-                        name = name,
-                        price = price,
-                        change = chg,
-                        changePercent = chgPct,
-                        boardCount = if (chgPct >= 9.8) 1 else null,
-                        tag = tag,
-                        subDetail = subDetail
+                    items.add(
+                        ThematicStockItem(
+                            symbol = fullSymbol,
+                            name = name,
+                            price = price,
+                            change = chg,
+                            changePercent = chgPct,
+                            boardCount = if (chgPct >= 9.8) 1 else null,
+                            tag = tag,
+                            subDetail = subDetail
+                        )
                     )
-                )
+                }
+            }
+            return Pair(items, total)
+        } catch (_: Exception) {
+            return Pair(emptyList(), 0)
+        }
+    }
+
+    private fun fetchEastMoneySectorConstituents(bkCode: String, limit: Int = 15): List<ThematicStockItem> {
+        return fetchEastMoneySectorConstituentsPage(bkCode, page = 1, pageSize = limit).first
+    }
+
+    private fun fetchEastMoneySectorConstituentsFull(bkCode: String, maxItems: Int = 1500): Pair<List<ThematicStockItem>, Int> {
+        val clean = bkCode.trim().uppercase()
+        val allItems = mutableListOf<ThematicStockItem>()
+        var reportedTotal = 0
+
+        // Page 1 (pz=100)
+        val (page1Items, total) = fetchEastMoneySectorConstituentsPage(clean, page = 1, pageSize = 100)
+        allItems.addAll(page1Items)
+        reportedTotal = total
+
+        // If total reported is greater than 100, fetch remaining pages
+        if (total > 100 && page1Items.isNotEmpty()) {
+            val totalPages = minOf((total + 99) / 100, (maxItems + 99) / 100)
+            for (p in 2..totalPages) {
+                val (pageItems, _) = fetchEastMoneySectorConstituentsPage(clean, page = p, pageSize = 100)
+                if (pageItems.isEmpty()) break
+                allItems.addAll(pageItems)
             }
         }
-        return items
+
+        val finalTotal = if (reportedTotal > 0) reportedTotal else allItems.size
+        return Pair(allItems, finalTotal)
     }
 
     // --- Direct Tencent & Sina Feed Implementations ---
