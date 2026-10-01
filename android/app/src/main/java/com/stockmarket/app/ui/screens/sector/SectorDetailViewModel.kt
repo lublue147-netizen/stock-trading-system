@@ -8,7 +8,6 @@ import com.stockmarket.app.data.model.ThematicStockItem
 import com.stockmarket.app.data.repository.StockRepository
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.async
-import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -16,6 +15,7 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.supervisorScope
 
 data class SectorDetailUiState(
     val bkCode: String,
@@ -40,6 +40,7 @@ class SectorDetailViewModel(
     val uiState: StateFlow<SectorDetailUiState>
 
     private var refreshJob: Job? = null
+    private var isFetching = false
 
     init {
         val initialCached = repository.getCachedSectorDetail(bkCode)
@@ -73,9 +74,11 @@ class SectorDetailViewModel(
     }
 
     fun loadData(isInitial: Boolean = false) {
+        if (isFetching) return
+        isFetching = true
+
         viewModelScope.launch {
             if (isInitial) {
-                // Check if newly cached
                 val cached = repository.getCachedSectorDetail(bkCode)
                 if (cached != null) {
                     val name = if (cached.quote.name.isNotEmpty() && cached.quote.name != bkCode) cached.quote.name else sectorName
@@ -96,49 +99,66 @@ class SectorDetailViewModel(
             }
 
             try {
-                coroutineScope {
-                    // Fetch Sector Quote + Constituents AND Intraday Trends in parallel!
-                    val detailDeferred = async { repository.getSectorDetail(bkCode) }
-                    val trendsDeferred = async { repository.getHistoricalData(bkCode, "1d") }
-
-                    // As soon as sector constituents arrive, IMMEDIATELY update UI and clear loading spinner!
-                    val detailRes = detailDeferred.await()
-                    val detail = detailRes.getOrNull()
-                    if (detail != null) {
-                        val q = detail.quote
-                        val name = if (q.name.isNotEmpty() && q.name != bkCode) q.name else sectorName
-                        _uiState.update { state ->
-                            state.copy(
-                                isLoading = false,
-                                isRefreshing = false,
-                                sectorName = name,
-                                quote = q,
-                                constituents = detail.constituents,
-                                totalConstituents = detail.totalCount,
-                                isWatchlisted = repository.isWatchlisted(bkCode)
-                            )
+                supervisorScope {
+                    // 1. Fetch Sector Quote + Constituents
+                    launch {
+                        try {
+                            val detailRes = repository.getSectorDetail(bkCode)
+                            val detail = detailRes.getOrNull()
+                            if (detail != null) {
+                                val q = detail.quote
+                                val name = if (q.name.isNotEmpty() && q.name != bkCode) q.name else sectorName
+                                _uiState.update { state ->
+                                    state.copy(
+                                        isLoading = false,
+                                        isRefreshing = false,
+                                        sectorName = name,
+                                        quote = q,
+                                        constituents = detail.constituents,
+                                        totalConstituents = detail.totalCount,
+                                        isWatchlisted = repository.isWatchlisted(bkCode),
+                                        errorMessage = if (detail.constituents.isEmpty()) "未获取到该板块成分股数据，请下拉刷新" else null
+                                    )
+                                }
+                            } else {
+                                _uiState.update { state ->
+                                    state.copy(
+                                        isLoading = false,
+                                        isRefreshing = false,
+                                        errorMessage = "加载板块详情失败，请重试"
+                                    )
+                                }
+                            }
+                        } catch (e: Exception) {
+                            _uiState.update { state ->
+                                state.copy(
+                                    isLoading = false,
+                                    isRefreshing = false,
+                                    errorMessage = "网络连接异常: ${e.localizedMessage ?: "请重试"}"
+                                )
+                            }
                         }
                     }
 
-                    // Update trend candles when ready
-                    val trendsRes = trendsDeferred.await()
-                    val trend = trendsRes.getOrNull()?.candles
-                    if (trend != null) {
-                        _uiState.update { state ->
-                            state.copy(
-                                isLoading = false,
-                                isRefreshing = false,
-                                trendCandles = trend
-                            )
-                        }
-                    } else {
-                        _uiState.update { state ->
-                            state.copy(isLoading = false, isRefreshing = false)
+                    // 2. Fetch Intraday Trends in parallel (independent from constituents)
+                    launch {
+                        try {
+                            val trendsRes = repository.getHistoricalData(bkCode, "1d")
+                            val trend = trendsRes.getOrNull()?.candles
+                            if (trend != null) {
+                                _uiState.update { state ->
+                                    state.copy(trendCandles = trend)
+                                }
+                            }
+                        } catch (_: Exception) {
+                            // Trend error will not affect constituents
                         }
                     }
                 }
-            } catch (_: Exception) {
-                _uiState.update { it.copy(isLoading = false, isRefreshing = false) }
+            } catch (e: Exception) {
+                _uiState.update { it.copy(isLoading = false, isRefreshing = false, errorMessage = e.localizedMessage) }
+            } finally {
+                isFetching = false
             }
         }
     }

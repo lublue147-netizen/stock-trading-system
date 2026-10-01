@@ -1,5 +1,6 @@
 package com.stockmarket.app.ui.screens.sector
 
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -485,10 +486,34 @@ fun SectorDetailScreen(
                         Box(
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .padding(40.dp),
+                                .padding(horizontal = 24.dp, vertical = 40.dp),
                             contentAlignment = Alignment.Center
                         ) {
-                            Text(text = "暂无成分股数据", color = TextSecondary, fontSize = 14.sp)
+                            Column(
+                                horizontalAlignment = Alignment.CenterHorizontally,
+                                verticalArrangement = Arrangement.spacedBy(12.dp)
+                            ) {
+                                Text(
+                                    text = state.errorMessage ?: "暂无成分股数据",
+                                    color = TextSecondary,
+                                    fontSize = 14.sp,
+                                    textAlign = TextAlign.Center
+                                )
+                                OutlinedButton(
+                                    onClick = { viewModel.loadData(isInitial = false) },
+                                    border = BorderStroke(1.dp, PrimaryBlue),
+                                    shape = RoundedCornerShape(16.dp)
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Default.Refresh,
+                                        contentDescription = null,
+                                        modifier = Modifier.size(15.dp),
+                                        tint = PrimaryBlue
+                                    )
+                                    Spacer(modifier = Modifier.width(6.dp))
+                                    Text("重新加载", color = PrimaryBlue, fontSize = 13.sp)
+                                }
+                            }
                         }
                     }
                 } else {

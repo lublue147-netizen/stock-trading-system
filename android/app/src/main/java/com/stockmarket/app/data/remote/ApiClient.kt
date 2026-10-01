@@ -24,6 +24,12 @@ object ApiClient {
         })
         .build()
 
+    val fastOkHttpClient = okHttpClient.newBuilder()
+        .connectTimeout(4, TimeUnit.SECONDS)
+        .readTimeout(6, TimeUnit.SECONDS)
+        .callTimeout(8, TimeUnit.SECONDS)
+        .build()
+
     private var currentBaseUrl: String = DEFAULT_BASE_URL
     private var cachedService: StockApiService? = null
 
