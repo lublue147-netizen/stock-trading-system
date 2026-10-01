@@ -35,6 +35,7 @@ import com.stockmarket.app.data.model.TickTransaction
 import com.stockmarket.app.ui.components.CandlestickChart
 import com.stockmarket.app.ui.components.ChartType
 import com.stockmarket.app.ui.components.TimeframeSelector
+import com.stockmarket.app.ui.components.formatVolumeInLots
 import com.stockmarket.app.ui.theme.*
 import kotlinx.coroutines.launch
 import java.text.SimpleDateFormat
@@ -60,6 +61,7 @@ fun StockDetailScreen(
     var showAlertDialog by remember { mutableStateOf(false) }
     var showDiagnosisDialog by remember { mutableStateOf(false) }
     var showDatePickerDialog by remember { mutableStateOf(false) }
+    var selectedKLineCandle by remember { mutableStateOf<CandlePoint?>(null) }
 
     // Market trading status string (A-Share CST: 09:30-11:30, 13:00-15:00)
     val marketStatus = remember {
@@ -460,7 +462,10 @@ fun StockDetailScreen(
             // Timeframe Selector Tabs (分时 | 五日 | 日K | 周K | 月K | 全部)
             TimeframeSelector(
                 selectedRange = state.selectedRange,
-                onRangeSelected = { viewModel.loadHistory(it) }
+                onRangeSelected = {
+                    selectedKLineCandle = null
+                    viewModel.loadHistory(it)
+                }
             )
 
             // When in 1d intraday mode, show East Money Historical Date Navigation Bar
@@ -472,10 +477,23 @@ fun StockDetailScreen(
                     isHistorical = state.isHistoricalIntraday,
                     historicalPrevClose = state.historicalPreviousClose,
                     candles = state.historicalData?.candles ?: emptyList(),
+                    previousKLineRange = state.previousKLineRange,
                     onPreviousDay = { viewModel.stepDate(-1) },
                     onNextDay = { viewModel.stepDate(1) },
                     onSelectDateClick = { showDatePickerDialog = true },
-                    onResetToday = { viewModel.resetToToday() }
+                    onResetToday = { viewModel.resetToToday() },
+                    onReturnToKLine = if (state.previousKLineRange != null) { { viewModel.returnToKLine() } } else null
+                )
+            } else {
+                // When in K-Line mode (日K/周K/月K), show East Money K-Line to Intraday Linkage Bar
+                Spacer(modifier = Modifier.height(8.dp))
+                KLineIntradayLinkBar(
+                    selectedCandle = selectedKLineCandle ?: state.historicalData?.candles?.lastOrNull(),
+                    allCandles = state.historicalData?.candles ?: emptyList(),
+                    availableDates = state.availableIntradayDates,
+                    onViewIntraday = { dateStr ->
+                        viewModel.viewIntradayFromKLine(dateStr, fromRange = state.selectedRange)
+                    }
                 )
             }
 
@@ -565,7 +583,13 @@ fun StockDetailScreen(
                     candles = state.historicalData?.candles ?: emptyList(),
                     chartType = state.chartType,
                     previousClose = effectivePreviousClose,
-                    showMA = state.showMA
+                    showMA = state.showMA,
+                    onCandleSelected = { candle ->
+                        selectedKLineCandle = candle
+                    },
+                    onViewIntradayForDate = { dateStr ->
+                        viewModel.viewIntradayFromKLine(dateStr, fromRange = state.selectedRange)
+                    }
                 )
             }
 
@@ -1659,9 +1683,11 @@ private fun DiagnosisItem(title: String, desc: String) {
 
 private fun formatDisplayDateWithWeekday(dateStr: String): String {
     return try {
-        val sdf = SimpleDateFormat("yyyy-MM-dd", Locale.getDefault())
+        val sdf = SimpleDateFormat("yyyy-MM-dd", Locale.getDefault()).apply {
+            timeZone = TimeZone.getTimeZone("GMT+8")
+        }
         val date = sdf.parse(dateStr) ?: return dateStr
-        val cal = Calendar.getInstance().apply { time = date }
+        val cal = Calendar.getInstance(TimeZone.getTimeZone("GMT+8")).apply { time = date }
         val weekDay = when (cal.get(Calendar.DAY_OF_WEEK)) {
             Calendar.MONDAY -> "周一"
             Calendar.TUESDAY -> "周二"
@@ -1679,16 +1705,131 @@ private fun formatDisplayDateWithWeekday(dateStr: String): String {
 }
 
 @Composable
+private fun KLineIntradayLinkBar(
+    selectedCandle: CandlePoint?,
+    allCandles: List<CandlePoint>,
+    availableDates: List<String>,
+    onViewIntraday: (String) -> Unit
+) {
+    val stockColors = LocalStockColors.current
+    val candle = selectedCandle ?: allCandles.lastOrNull()
+    if (candle == null) return
+
+    val sdfYmd = remember {
+        SimpleDateFormat("yyyy-MM-dd", Locale.getDefault()).apply {
+            timeZone = TimeZone.getTimeZone("GMT+8")
+        }
+    }
+    val dateKey = remember(candle.timestamp) { sdfYmd.format(Date(candle.timestamp)) }
+    val displayDate = remember(dateKey) { formatDisplayDateWithWeekday(dateKey) }
+    val isUp = candle.close >= candle.open
+    val color = if (isUp) stockColors.upColor else stockColors.downColor
+    val deltaPct = if (candle.open > 0) ((candle.close - candle.open) / candle.open) * 100 else 0.0
+    val prefix = if (isUp) "+" else ""
+
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(8.dp))
+            .background(EastMoneySurface)
+            .border(1.dp, EastMoneyBorder, RoundedCornerShape(8.dp))
+            .padding(horizontal = 10.dp, vertical = 7.dp)
+    ) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Row(
+                modifier = Modifier.weight(1f),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Icon(
+                    imageVector = Icons.Filled.DateRange,
+                    contentDescription = null,
+                    tint = EastMoneyOrange,
+                    modifier = Modifier.size(16.dp)
+                )
+                Spacer(modifier = Modifier.width(6.dp))
+                Column {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text(
+                            text = displayDate,
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = TextPrimary
+                        )
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text(
+                            text = "收: ${String.format(Locale.US, "%.2f", candle.close)}",
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.SemiBold,
+                            color = color
+                        )
+                        Spacer(modifier = Modifier.width(4.dp))
+                        Text(
+                            text = "$prefix${String.format(Locale.US, "%.2f%%", deltaPct)}",
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.SemiBold,
+                            color = color
+                        )
+                    }
+                    Text(
+                        text = "高: ${String.format(Locale.US, "%.2f", candle.high)}  低: ${String.format(Locale.US, "%.2f", candle.low)}  量: ${formatVolumeInLots(candle.volume)}",
+                        fontSize = 10.sp,
+                        color = TextMuted
+                    )
+                }
+            }
+
+            Spacer(modifier = Modifier.width(8.dp))
+
+            // Action Button: View Intraday for this K-line!
+            Row(
+                modifier = Modifier
+                    .clip(RoundedCornerShape(6.dp))
+                    .background(EastMoneyOrange.copy(alpha = 0.2f))
+                    .border(1.dp, EastMoneyOrange.copy(alpha = 0.7f), RoundedCornerShape(6.dp))
+                    .clickable { onViewIntraday(dateKey) }
+                    .padding(horizontal = 9.dp, vertical = 6.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    text = "查看当日分时",
+                    fontSize = 11.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = EastMoneyOrange
+                )
+                Icon(
+                    imageVector = Icons.Filled.KeyboardArrowRight,
+                    contentDescription = null,
+                    tint = EastMoneyOrange,
+                    modifier = Modifier.size(14.dp)
+                )
+            }
+        }
+        Spacer(modifier = Modifier.height(3.dp))
+        Text(
+            text = "💡 拖动或长按十字光标可选定任意日K，双击K线可直接穿透查看该日分时",
+            color = TextMuted.copy(alpha = 0.8f),
+            fontSize = 9.5.sp
+        )
+    }
+}
+
+@Composable
 private fun HistoricalIntradayDateBar(
     selectedDate: String?,
     availableDates: List<String>,
     isHistorical: Boolean,
     historicalPrevClose: Double?,
     candles: List<CandlePoint>,
+    previousKLineRange: String? = null,
     onPreviousDay: () -> Unit,
     onNextDay: () -> Unit,
     onSelectDateClick: () -> Unit,
-    onResetToday: () -> Unit
+    onResetToday: () -> Unit,
+    onReturnToKLine: (() -> Unit)? = null
 ) {
     val stockColors = LocalStockColors.current
     val currentDate = selectedDate ?: availableDates.lastOrNull() ?: "今日"
@@ -1768,7 +1909,7 @@ private fun HistoricalIntradayDateBar(
                 )
             }
 
-            // Right Group: Next Day Button & Return to Today Button
+            // Right Group: Next Day Button, Return to Today Button, and Return to K-Line Button
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Row(
                     modifier = Modifier
@@ -1803,11 +1944,39 @@ private fun HistoricalIntradayDateBar(
                             .padding(horizontal = 6.dp, vertical = 4.dp)
                     ) {
                         Text(
-                            text = "返回今日",
+                            text = "今日",
                             fontSize = 10.sp,
                             fontWeight = FontWeight.Bold,
                             color = EastMoneyRed
                         )
+                    }
+                }
+
+                if (onReturnToKLine != null) {
+                    Spacer(modifier = Modifier.width(6.dp))
+                    Box(
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(6.dp))
+                            .background(EastMoneyOrange.copy(alpha = 0.18f))
+                            .border(1.dp, EastMoneyOrange.copy(alpha = 0.6f), RoundedCornerShape(6.dp))
+                            .clickable { onReturnToKLine() }
+                            .padding(horizontal = 6.dp, vertical = 4.dp)
+                    ) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Icon(
+                                imageVector = Icons.AutoMirrored.Filled.ArrowBack,
+                                contentDescription = null,
+                                tint = EastMoneyOrange,
+                                modifier = Modifier.size(11.dp)
+                            )
+                            Spacer(modifier = Modifier.width(2.dp))
+                            Text(
+                                text = "回K线",
+                                fontSize = 10.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = EastMoneyOrange
+                            )
+                        }
                     }
                 }
             }
@@ -1835,8 +2004,9 @@ private fun HistoricalIntradayDateBar(
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
+                val modeLabel = if (onReturnToKLine != null) "【日K穿透分时】" else "【历史分时】"
                 Text(
-                    text = "【历史分时】昨收: ${String.format(Locale.US, "%.2f", refClose)}",
+                    text = "${modeLabel}昨收: ${String.format(Locale.US, "%.2f", refClose)}",
                     color = TextSecondary,
                     fontSize = 10.sp
                 )

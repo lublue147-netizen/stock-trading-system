@@ -27,7 +27,9 @@ data class StockDetailUiState(
     val selectedIntradayDate: String? = null,
     val availableIntradayDates: List<String> = emptyList(),
     val isHistoricalIntraday: Boolean = false,
-    val historicalPreviousClose: Double? = null
+    val historicalPreviousClose: Double? = null,
+    val previousKLineRange: String? = null,
+    val selectedKLineDate: String? = null
 )
 
 class StockDetailViewModel(
@@ -97,6 +99,21 @@ class StockDetailViewModel(
 
     fun selectHistoricalDate(date: String) {
         loadHistory("1d", date)
+    }
+
+    fun viewIntradayFromKLine(date: String, fromRange: String = "1mo") {
+        _uiState.update { it.copy(previousKLineRange = fromRange, selectedKLineDate = date) }
+        loadHistory("1d", date)
+    }
+
+    fun returnToKLine() {
+        val targetRange = _uiState.value.previousKLineRange ?: "1mo"
+        _uiState.update { it.copy(previousKLineRange = null) }
+        loadHistory(targetRange)
+    }
+
+    fun setSelectedKLineDate(date: String?) {
+        _uiState.update { it.copy(selectedKLineDate = date) }
     }
 
     fun stepDate(direction: Int) {

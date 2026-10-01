@@ -6,6 +6,11 @@ import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.KeyboardArrowRight
+import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -40,7 +45,9 @@ fun CandlestickChart(
     chartType: ChartType = ChartType.CANDLESTICK,
     previousClose: Double? = null,
     modifier: Modifier = Modifier,
-    showMA: Boolean = true
+    showMA: Boolean = true,
+    onCandleSelected: ((CandlePoint?) -> Unit)? = null,
+    onViewIntradayForDate: ((String) -> Unit)? = null
 ) {
     if (candles.isEmpty()) {
         Box(
@@ -88,8 +95,23 @@ fun CandlestickChart(
         // Top Info & Indicator Legend (East Money Style)
         Column(modifier = Modifier.fillMaxWidth()) {
             if (activeCandle != null) {
-                val dateFormat = remember { SimpleDateFormat("yyyy/MM/dd HH:mm", Locale.getDefault()) }
+                LaunchedEffect(activeCandle) {
+                    onCandleSelected?.invoke(activeCandle)
+                }
+
+                val dateFormat = remember {
+                    SimpleDateFormat("yyyy/MM/dd HH:mm", Locale.getDefault()).apply {
+                        timeZone = TimeZone.getTimeZone("GMT+8")
+                    }
+                }
                 val dateStr = dateFormat.format(Date(activeCandle.timestamp))
+                val ymdFormat = remember {
+                    SimpleDateFormat("yyyy-MM-dd", Locale.getDefault()).apply {
+                        timeZone = TimeZone.getTimeZone("GMT+8")
+                    }
+                }
+                val candleYmd = ymdFormat.format(Date(activeCandle.timestamp))
+
                 val prevRef = if (chartType == ChartType.LINE && previousClose != null && previousClose > 0) previousClose else activeCandle.open
                 val candleDelta = activeCandle.close - prevRef
                 val candleDeltaPercent = if (prevRef > 0) (candleDelta / prevRef) * 100 else 0.0
@@ -121,6 +143,33 @@ fun CandlestickChart(
                             fontSize = 11.sp,
                             fontWeight = FontWeight.SemiBold
                         )
+
+                        // East Money Style: Direct shortcut button to view intraday from K-Line!
+                        if (chartType == ChartType.CANDLESTICK && onViewIntradayForDate != null) {
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Row(
+                                modifier = Modifier
+                                    .clip(RoundedCornerShape(4.dp))
+                                    .background(EastMoneyOrange.copy(alpha = 0.18f))
+                                    .border(1.dp, EastMoneyOrange.copy(alpha = 0.6f), RoundedCornerShape(4.dp))
+                                    .clickable { onViewIntradayForDate(candleYmd) }
+                                    .padding(horizontal = 6.dp, vertical = 2.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Text(
+                                    text = "当日分时",
+                                    color = EastMoneyOrange,
+                                    fontSize = 10.sp,
+                                    fontWeight = FontWeight.Bold
+                                )
+                                Icon(
+                                    imageVector = Icons.Filled.KeyboardArrowRight,
+                                    contentDescription = "查看分时",
+                                    tint = EastMoneyOrange,
+                                    modifier = Modifier.size(12.dp)
+                                )
+                            }
+                        }
                     }
                 }
 
@@ -183,6 +232,18 @@ fun CandlestickChart(
                         },
                         onTap = { offset ->
                             selectedIndex = calculateCandleIndex(offset.x, size.width.toFloat(), candles.size)
+                        },
+                        onDoubleTap = { offset ->
+                            val idx = calculateCandleIndex(offset.x, size.width.toFloat(), candles.size)
+                            selectedIndex = idx
+                            if (chartType == ChartType.CANDLESTICK && onViewIntradayForDate != null) {
+                                candles.getOrNull(idx)?.let { c ->
+                                    val ymd = SimpleDateFormat("yyyy-MM-dd", Locale.getDefault()).apply {
+                                        timeZone = TimeZone.getTimeZone("GMT+8")
+                                    }.format(Date(c.timestamp))
+                                    onViewIntradayForDate(ymd)
+                                }
+                            }
                         }
                     )
                 }
@@ -536,7 +597,7 @@ private fun calculateCandleIndex(touchX: Float, width: Float, candleCount: Int):
     return index.coerceIn(0, candleCount - 1)
 }
 
-private fun formatVolumeInLots(vol: Long): String {
+fun formatVolumeInLots(vol: Long): String {
     // 1 lot (手) = 100 shares
     val lots = vol / 100
     return when {
