@@ -541,6 +541,66 @@ export default {
       }
     }
 
+    // Proxy: East Money sector constituent list (bypasses geo-block on push2.eastmoney.com)
+    if (path === '/api/sector/constituents') {
+      const bk = url.searchParams.get('bk');
+      const pn = url.searchParams.get('pn') || '1';
+      const pz = url.searchParams.get('pz') || '100';
+      if (!bk) return jsonRes({ error: 'Query parameter "bk" is required' }, 400);
+      const clean = bk.trim().toUpperCase();
+      try {
+        const emUrl = `https://push2.eastmoney.com/api/qt/clist/get?pn=${pn}&pz=${pz}&po=1&np=1&ut=bd1d9ddb04089700cf9c27f6f7426281&fltt=2&invt=2&fid=f3&fs=b:${clean}&fields=f12,f14,f2,f3,f4,f5,f6,f7,f15,f16,f17,f18,f100`;
+        const res = await fetch(emUrl, {
+          headers: {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+            'Referer': 'https://quote.eastmoney.com/',
+            'Accept': '*/*',
+          },
+        });
+        if (!res.ok) return jsonRes({ error: `upstream ${res.status}` }, 502);
+        const data = await res.json();
+        return new Response(JSON.stringify(data), {
+          status: 200,
+          headers: {
+            'Content-Type': 'application/json',
+            'Cache-Control': 'public, max-age=12, s-maxage=15',
+            ...CORS_HEADERS,
+          },
+        });
+      } catch (e) {
+        return jsonRes({ error: String(e) }, 502);
+      }
+    }
+
+    // Proxy: East Money sector index quote (bypasses geo-block)
+    if (path === '/api/sector/quote') {
+      const bk = url.searchParams.get('bk');
+      if (!bk) return jsonRes({ error: 'Query parameter "bk" is required' }, 400);
+      const clean = bk.trim().toUpperCase();
+      try {
+        const emUrl = `https://push2.eastmoney.com/api/qt/ulist.np/get?secids=90.${clean}&fields=f12,f14,f2,f3,f4,f5,f6,f7,f15,f16,f17,f18,f20,f21,f113,f114,f115,f116&ut=bd1d9ddb04089700cf9c27f6f7426281&fltt=2&invt=2`;
+        const res = await fetch(emUrl, {
+          headers: {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+            'Referer': 'https://quote.eastmoney.com/',
+            'Accept': '*/*',
+          },
+        });
+        if (!res.ok) return jsonRes({ error: `upstream ${res.status}` }, 502);
+        const data = await res.json();
+        return new Response(JSON.stringify(data), {
+          status: 200,
+          headers: {
+            'Content-Type': 'application/json',
+            'Cache-Control': 'public, max-age=10, s-maxage=12',
+            ...CORS_HEADERS,
+          },
+        });
+      } catch (e) {
+        return jsonRes({ error: String(e) }, 502);
+      }
+    }
+
     return jsonRes({ error: 'Not Found' }, 404);
   },
 };

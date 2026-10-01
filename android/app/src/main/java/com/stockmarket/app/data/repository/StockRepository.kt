@@ -904,7 +904,7 @@ class StockRepository(
     private fun fetchEastMoneySectorConstituentsPage(
         bkCode: String,
         page: Int = 1,
-        pageSize: Int = 100
+        pageSize: Int = 500
     ): Pair<List<ThematicStockItem>, Int> {
         val rawClean = bkCode.trim().uppercase()
         val clean = if (!rawClean.startsWith("BK") && rawClean.matches(Regex("^[0-9]{4,6}$"))) "BK$rawClean" else rawClean
@@ -1023,14 +1023,15 @@ class StockRepository(
         return fetchEastMoneySectorConstituentsPage(bkCode, page = 1, pageSize = limit).first
     }
 
-    private fun fetchEastMoneySectorConstituentsFull(bkCode: String, maxItems: Int = 1500): Pair<List<ThematicStockItem>, Int> {
+    private fun fetchEastMoneySectorConstituentsFull(bkCode: String, maxItems: Int = 2000): Pair<List<ThematicStockItem>, Int> {
         val clean = bkCode.trim().uppercase()
         val allItems = mutableListOf<ThematicStockItem>()
         val seenSymbols = HashSet<String>()
         var reportedTotal = 0
 
-        // Page 1 (pz=100)
-        val (page1Items, total) = fetchEastMoneySectorConstituentsPage(clean, page = 1, pageSize = 100)
+        // Page 1 — use pz=500 so most sectors (≤500 stocks) are done in 1 request
+        val (page1Items, total) = fetchEastMoneySectorConstituentsPage(clean, page = 1, pageSize = 500)
+        android.util.Log.d("SectorPagination", "[$clean] page1: ${page1Items.size} items, total=$total")
         for (item in page1Items) {
             if (seenSymbols.add(item.symbol)) {
                 allItems.add(item)
@@ -1038,22 +1039,25 @@ class StockRepository(
         }
         reportedTotal = total
 
-        // If total reported is greater than 100 or page1 had 100 items and total was unknown, fetch remaining pages
-        val targetCount = if (reportedTotal > 0) reportedTotal else if (page1Items.size == 100) maxItems else page1Items.size
-        if (targetCount > 100 && page1Items.isNotEmpty()) {
-            val totalPages = minOf((targetCount + 99) / 100, (maxItems + 99) / 100)
+        // Only paginate if there are more than 500 stocks
+        val targetCount = if (reportedTotal > 0) reportedTotal else if (page1Items.size == 500) maxItems else page1Items.size
+        if (targetCount > 500 && page1Items.isNotEmpty()) {
+            val totalPages = minOf((targetCount + 499) / 500, (maxItems + 499) / 500)
+            android.util.Log.d("SectorPagination", "[$clean] needs $totalPages pages (target=$targetCount)")
             for (p in 2..totalPages) {
-                val (pageItems, _) = fetchEastMoneySectorConstituentsPage(clean, page = p, pageSize = 100)
+                val (pageItems, _) = fetchEastMoneySectorConstituentsPage(clean, page = p, pageSize = 500)
+                android.util.Log.d("SectorPagination", "[$clean] page$p: ${pageItems.size} items")
                 if (pageItems.isEmpty()) break
                 for (item in pageItems) {
                     if (seenSymbols.add(item.symbol)) {
                         allItems.add(item)
                     }
                 }
-                if (pageItems.size < 100) break
+                if (pageItems.size < 500) break
             }
         }
 
+        android.util.Log.d("SectorPagination", "[$clean] final: ${allItems.size} total items")
         val finalTotal = if (reportedTotal > 0) maxOf(reportedTotal, allItems.size) else allItems.size
         return Pair(allItems, finalTotal)
     }
