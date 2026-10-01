@@ -54,8 +54,10 @@ fun StockCard(
             // Left: Symbol, Exchange & Company Name
             Column(modifier = Modifier.weight(1f)) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
+                    val primaryTitle = if (isSector && quote.name.isNotEmpty() && quote.name != quote.symbol) quote.name else quote.symbol
+                    val secondaryTitle = if (isSector && quote.name.isNotEmpty() && quote.name != quote.symbol) quote.symbol else quote.name
                     Text(
-                        text = quote.symbol,
+                        text = primaryTitle,
                         color = TextPrimary,
                         fontSize = 17.sp,
                         fontWeight = FontWeight.Bold
@@ -84,8 +86,9 @@ fun StockCard(
                 }
                 Spacer(modifier = Modifier.height(3.dp))
                 Row(verticalAlignment = Alignment.CenterVertically) {
+                    val secondaryTitle = if (isSector && quote.name.isNotEmpty() && quote.name != quote.symbol) quote.symbol else quote.name
                     Text(
-                        text = quote.name,
+                        text = secondaryTitle,
                         color = TextSecondary,
                         fontSize = 12.sp,
                         maxLines = 1

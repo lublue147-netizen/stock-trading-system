@@ -24,7 +24,9 @@ data class ThematicStockItem(
     val subDetail: String,
     val industry: String? = null,
     val industryBkCode: String? = null,
-    val industryChangePercent: Double? = null
+    val industryChangePercent: Double? = null,
+    val turnoverAmount: Double = 0.0,
+    val turnoverRate: Double = 0.0
 )
 
 data class MarketBreadth(

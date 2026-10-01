@@ -92,6 +92,14 @@ fun SectorDetailScreen(
 
     val totalDisplay = if (state.totalConstituents > 0) state.totalConstituents else sortedConstituents.size
 
+    val upCount = remember(state.constituents) { state.constituents.count { it.changePercent > 0.0 } }
+    val downCount = remember(state.constituents) { state.constituents.count { it.changePercent < 0.0 } }
+    val flatCount = remember(state.constituents) { state.constituents.count { it.changePercent == 0.0 && it.price > 0.0 } }
+    val limitUpCount = remember(state.constituents) { state.constituents.count { it.changePercent >= 9.8 } }
+    val leadingStock = remember(state.constituents) {
+        state.constituents.filter { it.price > 0.0 }.maxByOrNull { it.changePercent }
+    }
+
     Scaffold(
         topBar = {
             TopAppBar(
@@ -191,7 +199,9 @@ fun SectorDetailScreen(
                             verticalAlignment = Alignment.CenterVertically
                         ) {
                             Column {
-                                val priceStr = quote?.let { String.format(Locale.US, "%.2f", it.price) } ?: "--"
+                                val priceStr = quote?.let {
+                                    if (it.price > 0.0) String.format(Locale.US, "%.2f", it.price) else "--"
+                                } ?: "--"
                                 Text(
                                     text = priceStr,
                                     fontSize = 32.sp,
@@ -234,21 +244,95 @@ fun SectorDetailScreen(
                             }
                         }
 
-                        Spacer(modifier = Modifier.height(14.dp))
+                        // Sector Breadth Distribution Bar & Leader Pill
+                        if (state.constituents.isNotEmpty()) {
+                            Spacer(modifier = Modifier.height(10.dp))
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clip(RoundedCornerShape(6.dp))
+                                    .background(SurfaceBorder.copy(alpha = 0.35f))
+                                    .padding(horizontal = 10.dp, vertical = 6.dp),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Row(
+                                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Text(
+                                        text = "涨 $upCount",
+                                        color = stockColors.upColor,
+                                        fontSize = 12.sp,
+                                        fontWeight = FontWeight.Bold
+                                    )
+                                    Text(text = "·", color = TextMuted, fontSize = 12.sp)
+                                    Text(
+                                        text = "跌 $downCount",
+                                        color = stockColors.downColor,
+                                        fontSize = 12.sp,
+                                        fontWeight = FontWeight.Bold
+                                    )
+                                    Text(text = "·", color = TextMuted, fontSize = 12.sp)
+                                    Text(
+                                        text = "平 $flatCount",
+                                        color = TextSecondary,
+                                        fontSize = 12.sp
+                                    )
+                                    if (limitUpCount > 0) {
+                                        Text(text = "·", color = TextMuted, fontSize = 12.sp)
+                                        Text(
+                                            text = "涨停 $limitUpCount",
+                                            color = EastMoneyOrange,
+                                            fontSize = 12.sp,
+                                            fontWeight = FontWeight.Bold
+                                        )
+                                    }
+                                }
+                                if (leadingStock != null && leadingStock.changePercent > 0) {
+                                    Row(
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        modifier = Modifier.clickable { onStockClick(leadingStock.symbol) }
+                                    ) {
+                                        Text(
+                                            text = "领涨: ",
+                                            color = TextMuted,
+                                            fontSize = 11.sp
+                                        )
+                                        Text(
+                                            text = "${leadingStock.name} +${String.format(Locale.US, "%.2f%%", leadingStock.changePercent)}",
+                                            color = stockColors.upColor,
+                                            fontSize = 11.sp,
+                                            fontWeight = FontWeight.SemiBold,
+                                            maxLines = 1,
+                                            overflow = TextOverflow.Ellipsis
+                                        )
+                                    }
+                                }
+                            }
+                        }
 
-                        // Grid Metrics: 今开, 最高, 最低, 昨收, 成交额, 换手率
+                        Spacer(modifier = Modifier.height(12.dp))
+
+                        // Grid Metrics: 今开, 最高, 最低, 昨收, 成交额, 换手率, 成分股, 市场类型
                         quote?.let { q ->
                             Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                                MetricCell("今开", String.format(Locale.US, "%.2f", q.open))
-                                MetricCell("最高", String.format(Locale.US, "%.2f", q.high), quoteColor)
-                                MetricCell("最低", String.format(Locale.US, "%.2f", q.low))
-                                MetricCell("昨收", String.format(Locale.US, "%.2f", q.previousClose))
+                                val openStr = if (q.open > 0.0) String.format(Locale.US, "%.2f", q.open) else "--"
+                                val highStr = if (q.high > 0.0) String.format(Locale.US, "%.2f", q.high) else "--"
+                                val lowStr = if (q.low > 0.0) String.format(Locale.US, "%.2f", q.low) else "--"
+                                val prevStr = if (q.previousClose > 0.0) String.format(Locale.US, "%.2f", q.previousClose) else "--"
+
+                                MetricCell("今开", openStr)
+                                MetricCell("最高", highStr, if (q.high > q.previousClose && q.previousClose > 0) stockColors.upColor else TextPrimary)
+                                MetricCell("最低", lowStr, if (q.low < q.previousClose && q.low > 0) stockColors.downColor else TextPrimary)
+                                MetricCell("昨收", prevStr)
                             }
                             Spacer(modifier = Modifier.height(8.dp))
                             Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
                                 val turnoverStr = formatAmount(q.turnoverAmount)
+                                val turnoverRateStr = if (q.turnoverRate > 0.0) String.format(Locale.US, "%.2f%%", q.turnoverRate) else "--"
                                 MetricCell("成交额", turnoverStr)
-                                MetricCell("换手率", String.format(Locale.US, "%.2f%%", q.turnoverRate))
+                                MetricCell("换手率", turnoverRateStr)
                                 MetricCell("成分股", "$totalDisplay 只")
                                 MetricCell("市场类型", "A股板块")
                             }
@@ -343,7 +427,7 @@ fun SectorDetailScreen(
                                 title = "股票名称 / 代码",
                                 isSelected = sortField == SectorSortField.NAME_CODE,
                                 sortOrder = sortOrder,
-                                modifier = Modifier.weight(1.3f),
+                                modifier = Modifier.weight(1.65f),
                                 alignment = Alignment.Start,
                                 onClick = {
                                     if (sortField == SectorSortField.NAME_CODE) {
@@ -358,7 +442,7 @@ fun SectorDetailScreen(
                                 title = "最新价",
                                 isSelected = sortField == SectorSortField.PRICE,
                                 sortOrder = sortOrder,
-                                modifier = Modifier.weight(0.9f),
+                                modifier = Modifier.weight(0.75f),
                                 alignment = Alignment.End,
                                 onClick = {
                                     if (sortField == SectorSortField.PRICE) {
@@ -373,7 +457,7 @@ fun SectorDetailScreen(
                                 title = "涨跌幅",
                                 isSelected = sortField == SectorSortField.CHANGE_PERCENT,
                                 sortOrder = sortOrder,
-                                modifier = Modifier.weight(0.9f),
+                                modifier = Modifier.weight(0.80f),
                                 alignment = Alignment.End,
                                 onClick = {
                                     if (sortField == SectorSortField.CHANGE_PERCENT) {
@@ -388,7 +472,7 @@ fun SectorDetailScreen(
                                 text = "加自选",
                                 color = TextMuted,
                                 fontSize = 11.sp,
-                                modifier = Modifier.weight(0.5f),
+                                modifier = Modifier.weight(0.40f),
                                 textAlign = TextAlign.End
                             )
                         }
@@ -463,7 +547,7 @@ private fun ConstituentStockRow(
         verticalAlignment = Alignment.CenterVertically
     ) {
         // Stock Name & Code + Rank
-        Row(modifier = Modifier.weight(1.3f), verticalAlignment = Alignment.CenterVertically) {
+        Row(modifier = Modifier.weight(1.65f), verticalAlignment = Alignment.CenterVertically) {
             Box(
                 modifier = Modifier
                     .size(18.dp)
@@ -479,21 +563,16 @@ private fun ConstituentStockRow(
                 )
             }
             Spacer(modifier = Modifier.width(8.dp))
-            Column {
-                Text(
-                    text = stock.name,
-                    color = TextPrimary,
-                    fontSize = 14.sp,
-                    fontWeight = FontWeight.Bold,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis
-                )
-                Spacer(modifier = Modifier.height(2.dp))
+            Column(modifier = Modifier.weight(1f, fill = false)) {
+                // Line 1: Stock Name + Tag (e.g. 5连板 / 20cm涨停)
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Text(
-                        text = stock.symbol,
-                        color = TextSecondary,
-                        fontSize = 11.sp
+                        text = stock.name,
+                        color = TextPrimary,
+                        fontSize = 14.sp,
+                        fontWeight = FontWeight.Bold,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
                     )
                     if (stock.tag.isNotEmpty()) {
                         Spacer(modifier = Modifier.width(4.dp))
@@ -512,6 +591,15 @@ private fun ConstituentStockRow(
                             )
                         }
                     }
+                }
+                Spacer(modifier = Modifier.height(2.dp))
+                // Line 2: Stock Symbol + Industry Tag Pill
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        text = stock.symbol,
+                        color = TextSecondary,
+                        fontSize = 11.sp
+                    )
                     if (!stock.industry.isNullOrEmpty() && !stock.industryBkCode.isNullOrEmpty()) {
                         Spacer(modifier = Modifier.width(4.dp))
                         IndustryTagPill(
@@ -533,14 +621,14 @@ private fun ConstituentStockRow(
             color = color,
             fontSize = 14.sp,
             fontWeight = FontWeight.SemiBold,
-            modifier = Modifier.weight(0.9f),
+            modifier = Modifier.weight(0.75f),
             textAlign = TextAlign.End
         )
 
         // Change % Pill
         Box(
             modifier = Modifier
-                .weight(0.9f),
+                .weight(0.80f),
             contentAlignment = Alignment.CenterEnd
         ) {
             Box(
@@ -560,7 +648,7 @@ private fun ConstituentStockRow(
 
         // Add to watchlist button
         Box(
-            modifier = Modifier.weight(0.5f),
+            modifier = Modifier.weight(0.40f),
             contentAlignment = Alignment.CenterEnd
         ) {
             IconButton(

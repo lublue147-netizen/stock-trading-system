@@ -212,18 +212,19 @@ class StockRepository(
         val quoteMap = (stockQuotes + sectorQuotes).associateBy { it.symbol.uppercase() }
 
         val combined = symbols.map { sym ->
-            quoteMap[sym.uppercase()] ?: if (sym.startsWith("BK")) {
-                StockQuote(
-                    symbol = sym,
-                    name = getSectorName(sym),
-                    price = 2000.0,
+            val clean = sym.uppercase()
+            quoteMap[clean] ?: if (clean.startsWith("BK")) {
+                getCachedSectorDetail(clean)?.quote ?: StockQuote(
+                    symbol = clean,
+                    name = getSectorName(clean),
+                    price = 1000.0,
                     change = 0.0,
                     changePercent = 0.0,
                     currency = "点",
                     exchange = "板块"
                 )
             } else {
-                createFallbackQuote(sym)
+                createFallbackQuote(clean)
             }
         }
 
@@ -233,8 +234,16 @@ class StockRepository(
     suspend fun getStockQuote(symbol: String): Result<StockQuote> = withContext(Dispatchers.IO) {
         val clean = symbol.trim().uppercase()
         if (clean.startsWith("BK")) {
+            getCachedSectorDetail(clean)?.quote?.let {
+                return@withContext Result.success(it)
+            }
             try {
                 fetchDirectEastMoneySectorQuotes(listOf(clean))?.firstOrNull()?.let {
+                    if (it.price > 0.0 && it.price != 2000.0) return@withContext Result.success(it)
+                }
+            } catch (_: Exception) {}
+            try {
+                getSectorDetail(clean).getOrNull()?.quote?.let {
                     return@withContext Result.success(it)
                 }
             } catch (_: Exception) {}
@@ -242,7 +251,7 @@ class StockRepository(
                 StockQuote(
                     symbol = clean,
                     name = getSectorName(clean),
-                    price = 2000.0,
+                    price = 1000.0,
                     change = 0.0,
                     changePercent = 0.0,
                     currency = "点",
@@ -332,15 +341,12 @@ class StockRepository(
             return@withContext Result.success(it)
         }
 
-        val quote = fetchDirectEastMoneySectorQuotes(listOf(clean))?.firstOrNull() ?: StockQuote(
-            symbol = clean,
-            name = getSectorName(clean),
-            price = 2000.0,
-            change = 0.0,
-            changePercent = 0.0,
-            currency = "点",
-            exchange = "板块"
-        )
+        val rawQuote = try {
+            fetchDirectEastMoneySectorQuotes(listOf(clean))?.firstOrNull()
+        } catch (_: Exception) {
+            null
+        }
+
         val (constituents, totalCount) = fetchEastMoneySectorConstituentsFull(clean, maxItems = 1500)
         val finalConstituents = if (constituents.isNotEmpty()) {
             constituents
@@ -365,9 +371,62 @@ class StockRepository(
         val enrichedConstituents = enrichConstituentsWithIndustry(
             items = finalConstituents,
             currentSectorBkCode = clean,
-            sectorQuoteChange = quote.changePercent
+            sectorQuoteChange = rawQuote?.changePercent
         )
         val finalTotal = if (totalCount > 0) maxOf(totalCount, enrichedConstituents.size) else enrichedConstituents.size
+
+        val sectorName = rawQuote?.name?.takeIf { it.isNotEmpty() && it != clean } ?: getSectorName(clean)
+        val hasValidRawQuote = rawQuote != null &&
+                rawQuote.price > 0.0 &&
+                rawQuote.price != 2000.0 &&
+                (rawQuote.turnoverAmount > 0.0 || rawQuote.changePercent != 0.0 || rawQuote.high > 0.0)
+
+        val quote = if (hasValidRawQuote) {
+            val sumTurnover = enrichedConstituents.sumOf { it.turnoverAmount }
+            val avgTurnoverRate = if (enrichedConstituents.isNotEmpty()) {
+                val nonZero = enrichedConstituents.filter { it.turnoverRate > 0.0 }
+                if (nonZero.isNotEmpty()) round(nonZero.map { it.turnoverRate }.average() * 100) / 100.0 else 0.0
+            } else 0.0
+            rawQuote!!.copy(
+                name = sectorName,
+                turnoverAmount = if (rawQuote.turnoverAmount > 0.0) rawQuote.turnoverAmount else sumTurnover,
+                turnoverRate = if (rawQuote.turnoverRate > 0.0) rawQuote.turnoverRate else avgTurnoverRate
+            )
+        } else {
+            val validStocks = enrichedConstituents.filter { it.price > 0.0 }
+            val avgChangePercent = if (validStocks.isNotEmpty()) {
+                round(validStocks.map { it.changePercent }.average() * 100) / 100.0
+            } else 0.0
+            val basePrice = 1000.0
+            val currentPrice = round(basePrice * (1.0 + avgChangePercent / 100.0) * 100) / 100.0
+            val change = round((currentPrice - basePrice) * 100) / 100.0
+            val sumTurnover = enrichedConstituents.sumOf { it.turnoverAmount }
+            val avgTurnoverRate = if (validStocks.isNotEmpty()) {
+                val nonZero = validStocks.filter { it.turnoverRate > 0.0 }
+                if (nonZero.isNotEmpty()) round(nonZero.map { it.turnoverRate }.average() * 100) / 100.0 else 0.0
+            } else 0.0
+            val maxChg = validStocks.maxOfOrNull { it.changePercent } ?: avgChangePercent
+            val minChg = validStocks.minOfOrNull { it.changePercent } ?: avgChangePercent
+            val highPrice = round(basePrice * (1.0 + maxOf(maxChg, avgChangePercent, 0.0) / 100.0) * 100) / 100.0
+            val lowPrice = round(basePrice * (1.0 + minOf(minChg, avgChangePercent, 0.0) / 100.0) * 100) / 100.0
+
+            StockQuote(
+                symbol = clean,
+                name = sectorName,
+                price = currentPrice,
+                change = change,
+                changePercent = avgChangePercent,
+                currency = "点",
+                exchange = "板块",
+                open = basePrice,
+                high = highPrice,
+                low = lowPrice,
+                previousClose = basePrice,
+                turnoverAmount = sumTurnover,
+                turnoverRate = avgTurnoverRate
+            )
+        }
+
         val result = SectorDetailResult(quote, enrichedConstituents, finalTotal)
         sectorDetailCache[clean] = Pair(System.currentTimeMillis(), result)
         Result.success(result)
@@ -845,7 +904,7 @@ class StockRepository(
     private fun fetchEastMoneySectorConstituentsPage(
         bkCode: String,
         page: Int = 1,
-        pageSize: Int = 500
+        pageSize: Int = 100
     ): Pair<List<ThematicStockItem>, Int> {
         val rawClean = bkCode.trim().uppercase()
         val clean = if (!rawClean.startsWith("BK") && rawClean.matches(Regex("^[0-9]{4,6}$"))) "BK$rawClean" else rawClean
@@ -901,6 +960,8 @@ class StockRepository(
                 val chgPct = if (!rawChgPct.isNaN()) rawChgPct else 0.0
                 val rawChg = d.optDouble("f4", Double.NaN)
                 val chg = if (!rawChg.isNaN()) rawChg else 0.0
+                val turnover = d.optDouble("f6", 0.0)
+                val turnoverRate = d.optDouble("f7", 0.0)
 
                 val fullSymbol = when {
                     code.startsWith("6") || code.startsWith("68") -> "$code.SS"
@@ -946,7 +1007,9 @@ class StockRepository(
                         subDetail = subDetail,
                         industry = indName,
                         industryBkCode = indBk,
-                        industryChangePercent = null
+                        industryChangePercent = null,
+                        turnoverAmount = turnover,
+                        turnoverRate = turnoverRate
                     )
                 )
             }
@@ -963,20 +1026,31 @@ class StockRepository(
     private fun fetchEastMoneySectorConstituentsFull(bkCode: String, maxItems: Int = 1500): Pair<List<ThematicStockItem>, Int> {
         val clean = bkCode.trim().uppercase()
         val allItems = mutableListOf<ThematicStockItem>()
+        val seenSymbols = HashSet<String>()
         var reportedTotal = 0
 
-        // Page 1 (pz=500 fetches up to 500 stocks in 1 single fast request)
-        val (page1Items, total) = fetchEastMoneySectorConstituentsPage(clean, page = 1, pageSize = 500)
-        allItems.addAll(page1Items)
+        // Page 1 (pz=100)
+        val (page1Items, total) = fetchEastMoneySectorConstituentsPage(clean, page = 1, pageSize = 100)
+        for (item in page1Items) {
+            if (seenSymbols.add(item.symbol)) {
+                allItems.add(item)
+            }
+        }
         reportedTotal = total
 
-        // If total reported is greater than 500, fetch remaining pages
-        if (total > 500 && page1Items.isNotEmpty()) {
-            val totalPages = minOf((total + 499) / 500, (maxItems + 499) / 500)
+        // If total reported is greater than 100 or page1 had 100 items and total was unknown, fetch remaining pages
+        val targetCount = if (reportedTotal > 0) reportedTotal else if (page1Items.size == 100) maxItems else page1Items.size
+        if (targetCount > 100 && page1Items.isNotEmpty()) {
+            val totalPages = minOf((targetCount + 99) / 100, (maxItems + 99) / 100)
             for (p in 2..totalPages) {
-                val (pageItems, _) = fetchEastMoneySectorConstituentsPage(clean, page = p, pageSize = 500)
+                val (pageItems, _) = fetchEastMoneySectorConstituentsPage(clean, page = p, pageSize = 100)
                 if (pageItems.isEmpty()) break
-                allItems.addAll(pageItems)
+                for (item in pageItems) {
+                    if (seenSymbols.add(item.symbol)) {
+                        allItems.add(item)
+                    }
+                }
+                if (pageItems.size < 100) break
             }
         }
 
