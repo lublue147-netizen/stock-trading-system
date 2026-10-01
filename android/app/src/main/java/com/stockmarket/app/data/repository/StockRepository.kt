@@ -25,8 +25,11 @@ class StockRepository(
 
     private fun getService() = ApiClient.getService(preferences.getServerUrl())
 
+    private val stockIndustryCache = java.util.concurrent.ConcurrentHashMap<String, Pair<String, String>>()
+
     fun getSectorName(bkCode: String): String {
-        return when (bkCode.trim().uppercase()) {
+        val clean = bkCode.trim().uppercase()
+        return SECTOR_NAME_MAP[clean] ?: when (clean) {
             "BK1638" -> "最近多板"
             "BK1050" -> "昨日涨停-含一字"
             "BK1715" -> "趋势股"
@@ -37,6 +40,131 @@ class StockRepository(
             "BK0854" -> "华为概念"
             "800005" -> "A股平均股价"
             else -> bkCode
+        }
+    }
+
+    fun resolveStockIndustry(symbol: String): Pair<String, String> {
+        val clean = symbol.trim().uppercase()
+        val code = clean.substringBefore(".")
+
+        KNOWN_STOCK_INDUSTRIES[clean]?.let { return it }
+        KNOWN_STOCK_INDUSTRIES[code]?.let { return it }
+
+        stockIndustryCache[code]?.let { return it }
+
+        try {
+            fetchStockIndustryFromSurvey(clean)?.let {
+                stockIndustryCache[code] = it
+                return it
+            }
+        } catch (_: Exception) {}
+
+        val fallback = when {
+            code.startsWith("688") -> Pair("半导体", "BK1036")
+            code.startsWith("300") || code.startsWith("301") -> Pair("电子元件", "BK0459")
+            code.startsWith("600") || code.startsWith("601") -> Pair("通用设备", "BK0545")
+            else -> Pair("电子元件", "BK0459")
+        }
+        stockIndustryCache[code] = fallback
+        return fallback
+    }
+
+    private fun fetchStockIndustryFromSurvey(symbol: String): Pair<String, String>? {
+        val clean = symbol.trim().uppercase()
+        val code = clean.substringBefore(".")
+        val market = when {
+            clean.endsWith(".SS") || code.startsWith("6") || code.startsWith("68") -> "SH"
+            clean.endsWith(".BJ") || code.startsWith("8") || code.startsWith("4") || code.startsWith("920") -> "BJ"
+            else -> "SZ"
+        }
+        val url = "https://emweb.securities.eastmoney.com/PC_HSF10/CompanySurvey/CompanySurveyAjax?code=$market$code"
+        return try {
+            val request = Request.Builder()
+                .url(url)
+                .header("User-Agent", "Mozilla/5.0")
+                .build()
+            val response = ApiClient.okHttpClient.newCall(request).execute()
+            if (!response.isSuccessful) return null
+            val body = response.body?.string() ?: return null
+            val obj = JSONObject(body)
+            val jbzl = obj.optJSONObject("jbzl") ?: return null
+            val sshy = jbzl.optString("sshy", "").trim().takeIf { it.isNotEmpty() && it != "--" }
+            val sszjhhy = jbzl.optString("sszjhhy", "").trim().takeIf { it.isNotEmpty() && it != "--" }
+
+            val rawInd = sshy ?: sszjhhy?.substringAfter("-") ?: ""
+            if (rawInd.isEmpty()) return null
+
+            val matchedBk = EAST_MONEY_INDUSTRY_MAP[rawInd]
+                ?: EAST_MONEY_INDUSTRY_MAP.entries.firstOrNull { rawInd.contains(it.key) || it.key.contains(rawInd) }?.value
+                ?: "BK0459"
+            val standardName = SECTOR_NAME_MAP[matchedBk] ?: rawInd
+            Pair(standardName, matchedBk)
+        } catch (_: Exception) {
+            null
+        }
+    }
+
+    suspend fun enrichQuotesWithIndustry(quotes: List<StockQuote>): List<StockQuote> {
+        if (quotes.isEmpty()) return quotes
+        val assigned = quotes.map { q ->
+            if (q.symbol.startsWith("BK") || q.isIndex) q else {
+                val (indName, indBk) = resolveStockIndustry(q.symbol)
+                q.copy(industry = indName, industryBkCode = indBk)
+            }
+        }
+        val bkCodes = assigned.mapNotNull { it.industryBkCode }.distinct()
+        if (bkCodes.isEmpty()) return assigned
+
+        val sectorQuotes = try {
+            fetchDirectEastMoneySectorQuotes(bkCodes) ?: emptyList()
+        } catch (_: Exception) {
+            emptyList()
+        }
+        val sectorMap = sectorQuotes.associate { it.symbol.uppercase() to it.changePercent }
+        val fallbackMap = assigned.filter { it.industryBkCode != null && it.price > 0.0 }
+            .groupBy { it.industryBkCode!! }
+            .mapValues { entry ->
+                round(entry.value.map { it.changePercent }.average() * 100) / 100
+            }
+
+        return assigned.map { q ->
+            if (q.industryBkCode != null) {
+                val chg = sectorMap[q.industryBkCode.uppercase()]
+                    ?: fallbackMap[q.industryBkCode]
+                    ?: q.changePercent
+                q.copy(industryChangePercent = chg)
+            } else q
+        }
+    }
+
+    suspend fun enrichConstituentsWithIndustry(items: List<ThematicStockItem>): List<ThematicStockItem> {
+        if (items.isEmpty()) return items
+        val assigned = items.map { item ->
+            val (indName, indBk) = resolveStockIndustry(item.symbol)
+            item.copy(industry = indName, industryBkCode = indBk)
+        }
+        val bkCodes = assigned.mapNotNull { it.industryBkCode }.distinct()
+        if (bkCodes.isEmpty()) return assigned
+
+        val sectorQuotes = try {
+            fetchDirectEastMoneySectorQuotes(bkCodes) ?: emptyList()
+        } catch (_: Exception) {
+            emptyList()
+        }
+        val sectorMap = sectorQuotes.associate { it.symbol.uppercase() to it.changePercent }
+        val fallbackMap = assigned.filter { it.industryBkCode != null && it.price > 0.0 }
+            .groupBy { it.industryBkCode!! }
+            .mapValues { entry ->
+                round(entry.value.map { it.changePercent }.average() * 100) / 100
+            }
+
+        return assigned.map { item ->
+            if (item.industryBkCode != null) {
+                val chg = sectorMap[item.industryBkCode.uppercase()]
+                    ?: fallbackMap[item.industryBkCode]
+                    ?: item.changePercent
+                item.copy(industryChangePercent = chg)
+            } else item
         }
     }
 
@@ -147,7 +275,7 @@ class StockRepository(
             }
         }
 
-        Result.success(combined)
+        Result.success(enrichQuotesWithIndustry(combined))
     }
 
     suspend fun getStockQuote(symbol: String): Result<StockQuote> = withContext(Dispatchers.IO) {
@@ -175,7 +303,8 @@ class StockRepository(
         try {
             fetchDirectTencentQuote(symbol)?.let { quote ->
                 if (quote.price > 0.0) {
-                    return@withContext Result.success(quote)
+                    val enriched = enrichQuotesWithIndustry(listOf(quote)).firstOrNull() ?: quote
+                    return@withContext Result.success(enriched)
                 }
             }
         } catch (e: Exception) {
@@ -186,14 +315,17 @@ class StockRepository(
         try {
             val quote = getService().getQuote(symbol)
             if (quote.price > 0.0) {
-                return@withContext Result.success(quote)
+                val enriched = enrichQuotesWithIndustry(listOf(quote)).firstOrNull() ?: quote
+                return@withContext Result.success(enriched)
             }
         } catch (e: Exception) {
             // continue to fallback
         }
 
         // 3. High-Fidelity Fallback
-        Result.success(createFallbackQuote(symbol))
+        val fallback = createFallbackQuote(symbol)
+        val enriched = enrichQuotesWithIndustry(listOf(fallback)).firstOrNull() ?: fallback
+        Result.success(enriched)
     }
 
     suspend fun getHistoricalData(symbol: String, range: String, date: String? = null): Result<HistoricalData> = withContext(Dispatchers.IO) {
@@ -273,8 +405,9 @@ class StockRepository(
                 }
             } else emptyList()
         }
-        val finalTotal = if (totalCount > 0) maxOf(totalCount, finalConstituents.size) else finalConstituents.size
-        Result.success(SectorDetailResult(quote, finalConstituents, finalTotal))
+        val enrichedConstituents = enrichConstituentsWithIndustry(finalConstituents)
+        val finalTotal = if (totalCount > 0) maxOf(totalCount, enrichedConstituents.size) else enrichedConstituents.size
+        Result.success(SectorDetailResult(quote, enrichedConstituents, finalTotal))
     }
 
     private fun fetchEastMoneySuggest(query: String): List<SearchResult>? {
@@ -521,7 +654,10 @@ class StockRepository(
         }
 
         if (anyLoaded) {
-            return@withContext Result.success(resultMap)
+            val enrichedMap = resultMap.mapValues { entry ->
+                enrichConstituentsWithIndustry(entry.value).toMutableList()
+            }
+            return@withContext Result.success(enrichedMap)
         }
 
         // 2. Secondary Engine: Tencent batch query fallback
@@ -549,10 +685,16 @@ class StockRepository(
                 )
                 resultMap[def.sectorType]?.add(item)
             }
-            return@withContext Result.success(resultMap)
+            val enrichedMap = resultMap.mapValues { entry ->
+                enrichConstituentsWithIndustry(entry.value).toMutableList()
+            }
+            return@withContext Result.success(enrichedMap)
         } catch (_: Exception) {}
 
-        Result.success(resultMap)
+        val enrichedMap = resultMap.mapValues { entry ->
+            enrichConstituentsWithIndustry(entry.value).toMutableList()
+        }
+        Result.success(enrichedMap)
     }
 
     suspend fun getMarketBreadth(): Result<MarketBreadth> = withContext(Dispatchers.IO) {
@@ -665,6 +807,9 @@ class StockRepository(
             clean == "000001.SS" || clean == "SH000001" -> "1.000001"
             clean == "399001.SZ" || clean == "SZ399001" -> "0.399001"
             clean == "399006.SZ" || clean == "SZ399006" -> "0.399006"
+            clean == "000688.SS" || clean == "SH000688" -> "1.000688"
+            clean == "000300.SS" || clean == "SH000300" -> "1.000300"
+            clean == "899050.BJ" || clean == "BJ899050" -> "0.899050"
             clean.endsWith(".SS") || code.startsWith("6") || code.startsWith("68") -> "1.$code"
             clean.endsWith(".BJ") || code.startsWith("8") || code.startsWith("4") || code.startsWith("920") -> "0.$code"
             else -> "0.$code"
@@ -838,6 +983,12 @@ class StockRepository(
         val clean = symbol.trim().uppercase()
         val code = clean.substringBefore(".")
         return when {
+            clean == "000001.SS" || clean == "SH000001" -> "sh000001"
+            clean == "000688.SS" || clean == "SH000688" -> "sh000688"
+            clean == "000300.SS" || clean == "SH000300" -> "sh000300"
+            clean == "399001.SZ" || clean == "SZ399001" -> "sz399001"
+            clean == "399006.SZ" || clean == "SZ399006" -> "sz399006"
+            clean == "899050.BJ" || clean == "BJ899050" -> "bj899050"
             clean.endsWith(".SS") || code.startsWith("6") -> "sh$code"
             clean.endsWith(".BJ") || code.startsWith("8") || code.startsWith("4") || code.startsWith("920") -> "bj$code"
             else -> "sz$code"
@@ -882,8 +1033,22 @@ class StockRepository(
         val limitUpPrice = parts.getOrNull(47)?.toDoubleOrNull()?.takeIf { it > 0.0 } ?: (round(prevClose * 1.10 * 100) / 100)
         val limitDownPrice = parts.getOrNull(48)?.toDoubleOrNull()?.takeIf { it > 0.0 } ?: (round(prevClose * 0.90 * 100) / 100)
 
-        val sym = fallbackSymbol ?: tencentCodeToSymbol(code)
+        val varName = line.substringBefore("=").trim().lowercase()
+        val detectedSuffix = when {
+            varName.contains("sh") -> "SS"
+            varName.contains("sz") -> "SZ"
+            varName.contains("bj") -> "BJ"
+            else -> null
+        }
+        val sym = fallbackSymbol ?: if (detectedSuffix != null && code.isNotEmpty()) {
+            "$code.$detectedSuffix"
+        } else {
+            tencentCodeToSymbol(code)
+        }
+        val isIndex = sym in listOf("000001.SS", "399001.SZ", "399006.SZ", "000688.SS", "000300.SS", "899050.BJ") ||
+                      rawName.contains("指数") || rawName.contains("成指")
         val exchangeName = when {
+            isIndex -> "指数"
             sym.endsWith(".SS") -> "上交所"
             sym.endsWith(".BJ") -> "北交所"
             else -> "深交所"
@@ -931,9 +1096,11 @@ class StockRepository(
             eps = round((price / 25.0) * 100) / 100,
             bps = round((price / 4.0) * 100) / 100,
             roe = 15.6,
-            industry = getStockIndustry(sym),
-            mainBusiness = getStockBusiness(sym),
-            conceptTags = getStockConcepts(sym),
+            industry = if (isIndex) "大盘指数" else resolveStockIndustry(sym).first,
+            industryBkCode = if (isIndex) null else resolveStockIndustry(sym).second,
+            industryChangePercent = null,
+            mainBusiness = if (isIndex) "中国证券市场核心权威基准指数，全面综合表征市场价格动态与资金趋势。" else getStockBusiness(sym),
+            conceptTags = if (isIndex) listOf("大盘指数", "核心基准", "市场风向标") else getStockConcepts(sym),
             bids = bids,
             asks = asks
         )
@@ -952,7 +1119,14 @@ class StockRepository(
         if (!response.isSuccessful) return null
         val bytes = response.body?.bytes() ?: return null
         val text = String(bytes, Charset.forName("GBK"))
-        return parseTencentLine(text, clean)
+        val quote = parseTencentLine(text, clean) ?: return null
+        return if (!quote.isIndex && !clean.startsWith("BK") && quote.industryBkCode != null) {
+            val secQuotes = try {
+                fetchDirectEastMoneySectorQuotes(listOf(quote.industryBkCode))
+            } catch (_: Exception) { null }
+            val indChg = secQuotes?.firstOrNull()?.changePercent ?: quote.changePercent
+            quote.copy(industryChangePercent = indChg)
+        } else quote
     }
 
     private fun fetchDirectTencentQuotes(symbols: List<String>): List<StockQuote>? {
@@ -1249,6 +1423,48 @@ class StockRepository(
         val isChiNextOrStar = clean.startsWith("300") || clean.startsWith("301") || clean.startsWith("688")
 
         val data = when (clean) {
+            "000001.SS", "SH000001" -> FallbackData(
+                price = 3842.19, prevClose = 3830.45, open = 3839.25, high = 3851.22, low = 3833.09,
+                change = 11.74, changePercent = 0.31, turnoverRate = 0.85, volume = 414560247L,
+                marketCap = 48583207000000L, floatMarketCap = 48583207000000L, outerDisk = 0L, innerDisk = 0L,
+                industry = "大盘指数", business = "上海证券交易所核心综合指数，反映上海证券市场上市股票价格变动情况。",
+                concepts = listOf("大盘指数", "上证核心", "基准指数")
+            )
+            "399001.SZ", "SZ399001" -> FallbackData(
+                price = 12901.95, prevClose = 12858.75, open = 12860.00, high = 12945.50, low = 12840.10,
+                change = 43.20, changePercent = 0.34, turnoverRate = 1.12, volume = 582100300L,
+                marketCap = 34500000000000L, floatMarketCap = 34500000000000L, outerDisk = 0L, innerDisk = 0L,
+                industry = "大盘指数", business = "深圳证券交易所核心综合指数，反映深交所A股市场走势情况。",
+                concepts = listOf("大盘指数", "深证成指", "基准指数")
+            )
+            "399006.SZ", "SZ399006" -> FallbackData(
+                price = 3142.56, prevClose = 3139.82, open = 3140.00, high = 3165.20, low = 3132.80,
+                change = 2.74, changePercent = 0.09, turnoverRate = 1.45, volume = 224000100L,
+                marketCap = 14200000000000L, floatMarketCap = 14200000000000L, outerDisk = 0L, innerDisk = 0L,
+                industry = "大盘指数", business = "创业板核心指数，由创业板最具代表性的100家样本股组成。",
+                concepts = listOf("大盘指数", "创业板", "高成长")
+            )
+            "000688.SS", "SH000688" -> FallbackData(
+                price = 1569.34, prevClose = 1555.98, open = 1558.00, high = 1582.40, low = 1552.10,
+                change = 13.36, changePercent = 0.86, turnoverRate = 1.68, volume = 89500200L,
+                marketCap = 6800000000000L, floatMarketCap = 6800000000000L, outerDisk = 0L, innerDisk = 0L,
+                industry = "大盘指数", business = "科创板核心旗舰指数，由科创板中市值大、流动性好的50只证券组成。",
+                concepts = listOf("大盘指数", "科创板", "硬科技")
+            )
+            "000300.SS", "SH000300" -> FallbackData(
+                price = 4345.21, prevClose = 4340.76, open = 4342.00, high = 4368.50, low = 4335.20,
+                change = 4.45, changePercent = 0.10, turnoverRate = 0.65, volume = 289000500L,
+                marketCap = 42000000000000L, floatMarketCap = 42000000000000L, outerDisk = 0L, innerDisk = 0L,
+                industry = "大盘指数", business = "沪深300指数由沪深两市中市值大、流动性好的300只股票组成，综合反映沪深A股市场整体走势。",
+                concepts = listOf("大盘指数", "沪深300", "蓝筹核心")
+            )
+            "899050.BJ", "BJ899050" -> FallbackData(
+                price = 1432.18, prevClose = 1403.66, open = 1405.00, high = 1445.80, low = 1402.30,
+                change = 28.52, changePercent = 2.03, turnoverRate = 2.85, volume = 45200300L,
+                marketCap = 1100000000000L, floatMarketCap = 1100000000000L, outerDisk = 0L, innerDisk = 0L,
+                industry = "大盘指数", business = "北京证券交易所核心指数，表征北交所创新型中小企业整体走势。",
+                concepts = listOf("大盘指数", "北证50", "专精特新")
+            )
             "002579.SZ", "002579" -> FallbackData(
                 price = 17.90, prevClose = 17.30, open = 16.69, high = 18.30, low = 16.68,
                 change = 0.60, changePercent = 3.47, turnoverRate = 17.59, volume = 102635279L,
@@ -1322,7 +1538,10 @@ class StockRepository(
         }
 
         val currency = "CNY"
+        val isIndex = clean in listOf("000001.SS", "399001.SZ", "399006.SZ", "000688.SS", "000300.SS", "899050.BJ") ||
+                      clean.startsWith("SH000") || clean.startsWith("SZ399") || clean.startsWith("BJ899")
         val exchange = when {
+            isIndex -> "指数"
             clean.endsWith(".SS") || clean.startsWith("6") -> "上交所"
             clean.endsWith(".SZ") || clean.startsWith("0") || clean.startsWith("3") -> "深交所"
             clean.endsWith(".BJ") || clean.startsWith("8") || clean.startsWith("4") -> "北交所"
@@ -1480,6 +1699,286 @@ class StockRepository(
     }
 
     companion object {
+        val EAST_MONEY_INDUSTRY_MAP = mapOf(
+            "半导体" to "BK1036",
+            "电子元件" to "BK0459",
+            "元件" to "BK0459",
+            "电子元器件" to "BK0459",
+            "消费电子" to "BK1037",
+            "计算机设备" to "BK0735",
+            "电子信息" to "BK0735",
+            "软件开发" to "BK0737",
+            "通信设备" to "BK0448",
+            "通讯行业" to "BK0448",
+            "通信服务" to "BK0736",
+            "光学光电子" to "BK1038",
+            "汽车整车" to "BK1029",
+            "汽车" to "BK1029",
+            "汽车零部件" to "BK0481",
+            "汽车服务" to "BK1016",
+            "电池" to "BK1033",
+            "光伏设备" to "BK1031",
+            "风电设备" to "BK1032",
+            "电网设备" to "BK0457",
+            "电力设备" to "BK0457",
+            "专用设备" to "BK0910",
+            "通用设备" to "BK0545",
+            "证券" to "BK0473",
+            "证券Ⅱ" to "BK0473",
+            "银行" to "BK0475",
+            "银行Ⅱ" to "BK0475",
+            "保险" to "BK0474",
+            "保险Ⅱ" to "BK0474",
+            "白酒" to "BK0896",
+            "酿酒行业" to "BK0477",
+            "食品饮料" to "BK0438",
+            "医疗器械" to "BK1041",
+            "化学制药" to "BK0465",
+            "中药" to "BK1040",
+            "中药Ⅱ" to "BK1040",
+            "生物制品" to "BK1044",
+            "医药商业" to "BK1042",
+            "环保行业" to "BK0728",
+            "环保" to "BK0728",
+            "游戏" to "BK1046",
+            "游戏Ⅱ" to "BK1046",
+            "互联网服务" to "BK0447",
+            "文化传媒" to "BK0486",
+            "煤炭行业" to "BK0437",
+            "煤炭" to "BK0437",
+            "石油行业" to "BK0438",
+            "有色金属" to "BK0478",
+            "能源金属" to "BK1015",
+            "贵金属" to "BK0732",
+            "钢铁行业" to "BK0479",
+            "钢铁" to "BK0479",
+            "电力行业" to "BK0428",
+            "电力" to "BK0428",
+            "房地产开发" to "BK0451",
+            "房地产服务" to "BK0452",
+            "航运港口" to "BK0450",
+            "航空机场" to "BK0420",
+            "物流行业" to "BK0422",
+            "铁路公路" to "BK0427",
+            "白色家电" to "BK1239",
+            "黑色家电" to "BK1241",
+            "家用电器" to "BK1239",
+            "装修建材" to "BK0476",
+            "家居用品" to "BK0476",
+            "水泥建材" to "BK0424",
+            "工程机械" to "BK0733",
+            "农牧饲渔" to "BK0433",
+            "纺织服装" to "BK0436",
+            "商业百货" to "BK0482",
+            "旅游酒店" to "BK0485",
+            "化学制品" to "BK0467",
+            "化肥行业" to "BK0468",
+            "农药兽药" to "BK0466",
+            "塑料制品" to "BK0429",
+            "橡胶制品" to "BK0430",
+            "美容护理" to "BK1045"
+        )
+
+        val SECTOR_NAME_MAP = mapOf(
+            "BK1638" to "最近多板",
+            "BK1050" to "昨日涨停-含一字",
+            "BK1715" to "趋势股",
+            "BK1675" to "历史新高",
+            "800005" to "A股平均股价",
+            "BK1036" to "半导体",
+            "BK0459" to "电子元件",
+            "BK1037" to "消费电子",
+            "BK0737" to "软件开发",
+            "BK0448" to "通信设备",
+            "BK0736" to "通信服务",
+            "BK0735" to "计算机设备",
+            "BK1038" to "光学光电子",
+            "BK1029" to "汽车整车",
+            "BK0481" to "汽车零部件",
+            "BK1016" to "汽车服务",
+            "BK1033" to "电池",
+            "BK1031" to "光伏设备",
+            "BK1032" to "风电设备",
+            "BK0457" to "电网设备",
+            "BK0910" to "专用设备",
+            "BK0545" to "通用设备",
+            "BK0473" to "证券",
+            "BK0475" to "银行",
+            "BK0474" to "保险",
+            "BK0896" to "白酒",
+            "BK0477" to "酿酒行业",
+            "BK0438" to "石油行业",
+            "BK1041" to "医疗器械",
+            "BK0465" to "化学制药",
+            "BK1040" to "中药",
+            "BK1044" to "生物制品",
+            "BK1042" to "医药商业",
+            "BK0728" to "环保行业",
+            "BK1046" to "游戏",
+            "BK0447" to "互联网服务",
+            "BK0486" to "文化传媒",
+            "BK0437" to "煤炭行业",
+            "BK0478" to "有色金属",
+            "BK1015" to "能源金属",
+            "BK0732" to "贵金属",
+            "BK0479" to "钢铁行业",
+            "BK0428" to "电力行业",
+            "BK0451" to "房地产开发",
+            "BK0452" to "房地产服务",
+            "BK0450" to "航运港口",
+            "BK0420" to "航空机场",
+            "BK0422" to "物流行业",
+            "BK0427" to "铁路公路",
+            "BK1239" to "白色家电",
+            "BK1241" to "黑色家电",
+            "BK0476" to "家居用品",
+            "BK0424" to "水泥建材",
+            "BK0733" to "工程机械",
+            "BK0433" to "农牧饲渔",
+            "BK0436" to "纺织服装",
+            "BK0482" to "商业百货",
+            "BK0485" to "旅游酒店",
+            "BK0467" to "化学制品",
+            "BK0468" to "化肥行业",
+            "BK0466" to "农药兽药",
+            "BK0429" to "塑料制品",
+            "BK0430" to "橡胶制品",
+            "BK1045" to "美容护理",
+            "BK1166" to "低空经济",
+            "BK1184" to "人形机器人",
+            "BK0854" to "华为概念"
+        )
+
+        val KNOWN_STOCK_INDUSTRIES = mapOf(
+            "002579" to Pair("电子元件", "BK0459"),
+            "600519" to Pair("白酒", "BK0896"),
+            "000858" to Pair("白酒", "BK0896"),
+            "000568" to Pair("白酒", "BK0896"),
+            "002304" to Pair("白酒", "BK0896"),
+            "600809" to Pair("白酒", "BK0896"),
+            "000799" to Pair("白酒", "BK0896"),
+            "603369" to Pair("白酒", "BK0896"),
+            "600779" to Pair("白酒", "BK0896"),
+            "600702" to Pair("白酒", "BK0896"),
+            "603589" to Pair("白酒", "BK0896"),
+            "300750" to Pair("电池", "BK1033"),
+            "002074" to Pair("电池", "BK1033"),
+            "300014" to Pair("电池", "BK1033"),
+            "300769" to Pair("电池", "BK1033"),
+            "002594" to Pair("汽车整车", "BK1029"),
+            "601127" to Pair("汽车整车", "BK1029"),
+            "600104" to Pair("汽车整车", "BK1029"),
+            "601238" to Pair("汽车整车", "BK1029"),
+            "601633" to Pair("汽车整车", "BK1029"),
+            "000625" to Pair("汽车整车", "BK1029"),
+            "600418" to Pair("汽车整车", "BK1029"),
+            "000550" to Pair("汽车整车", "BK1029"),
+            "600006" to Pair("汽车整车", "BK1029"),
+            "600741" to Pair("汽车零部件", "BK0481"),
+            "601799" to Pair("汽车零部件", "BK0481"),
+            "603786" to Pair("汽车零部件", "BK0481"),
+            "002050" to Pair("通用设备", "BK0545"),
+            "001696" to Pair("通用设备", "BK0545"),
+            "300059" to Pair("证券", "BK0473"),
+            "600030" to Pair("证券", "BK0473"),
+            "601211" to Pair("证券", "BK0473"),
+            "600999" to Pair("证券", "BK0473"),
+            "600958" to Pair("证券", "BK0473"),
+            "601688" to Pair("证券", "BK0473"),
+            "601788" to Pair("证券", "BK0473"),
+            "600036" to Pair("银行", "BK0475"),
+            "000001" to Pair("银行", "BK0475"),
+            "601398" to Pair("银行", "BK0475"),
+            "601939" to Pair("银行", "BK0475"),
+            "601288" to Pair("银行", "BK0475"),
+            "601988" to Pair("银行", "BK0475"),
+            "601166" to Pair("银行", "BK0475"),
+            "601328" to Pair("银行", "BK0475"),
+            "600016" to Pair("银行", "BK0475"),
+            "601318" to Pair("保险", "BK0474"),
+            "601628" to Pair("保险", "BK0474"),
+            "601601" to Pair("保险", "BK0474"),
+            "601319" to Pair("保险", "BK0474"),
+            "601336" to Pair("保险", "BK0474"),
+            "688981" to Pair("半导体", "BK1036"),
+            "688256" to Pair("半导体", "BK1036"),
+            "688041" to Pair("半导体", "BK1036"),
+            "688012" to Pair("半导体", "BK1036"),
+            "603501" to Pair("半导体", "BK1036"),
+            "688008" to Pair("半导体", "BK1036"),
+            "002049" to Pair("半导体", "BK1036"),
+            "002371" to Pair("半导体", "BK1036"),
+            "688126" to Pair("半导体", "BK1036"),
+            "300661" to Pair("半导体", "BK1036"),
+            "300782" to Pair("半导体", "BK1036"),
+            "300476" to Pair("电子元件", "BK0459"),
+            "002463" to Pair("电子元件", "BK0459"),
+            "002384" to Pair("电子元件", "BK0459"),
+            "002916" to Pair("电子元件", "BK0459"),
+            "300078" to Pair("电子元件", "BK0459"),
+            "002475" to Pair("消费电子", "BK1037"),
+            "002241" to Pair("消费电子", "BK1037"),
+            "688036" to Pair("消费电子", "BK1037"),
+            "002456" to Pair("光学光电子", "BK1038"),
+            "000536" to Pair("光学光电子", "BK1038"),
+            "000725" to Pair("光学光电子", "BK1038"),
+            "002583" to Pair("通信设备", "BK0448"),
+            "000063" to Pair("通信设备", "BK0448"),
+            "300308" to Pair("通信设备", "BK0448"),
+            "300502" to Pair("通信设备", "BK0448"),
+            "600498" to Pair("通信设备", "BK0448"),
+            "601138" to Pair("通信设备", "BK0448"),
+            "300085" to Pair("软件开发", "BK0737"),
+            "000158" to Pair("软件开发", "BK0737"),
+            "300339" to Pair("软件开发", "BK0737"),
+            "002261" to Pair("软件开发", "BK0737"),
+            "600588" to Pair("软件开发", "BK0737"),
+            "300033" to Pair("软件开发", "BK0737"),
+            "688111" to Pair("软件开发", "BK0737"),
+            "002130" to Pair("电网设备", "BK0457"),
+            "600406" to Pair("电网设备", "BK0457"),
+            "002851" to Pair("电网设备", "BK0457"),
+            "600292" to Pair("环保行业", "BK0728"),
+            "300757" to Pair("专用设备", "BK0910"),
+            "603106" to Pair("计算机设备", "BK0735"),
+            "002094" to Pair("美容护理", "BK1045"),
+            "603268" to Pair("家居用品", "BK0476"),
+            "300760" to Pair("医疗器械", "BK1041"),
+            "002223" to Pair("医疗器械", "BK1041"),
+            "600276" to Pair("化学制药", "BK0465"),
+            "000538" to Pair("中药", "BK1040"),
+            "600436" to Pair("片仔癀", "BK1040"),
+            "600900" to Pair("电力行业", "BK0428"),
+            "601088" to Pair("煤炭行业", "BK0437"),
+            "601857" to Pair("石油行业", "BK0438"),
+            "600028" to Pair("石油行业", "BK0438"),
+            "600938" to Pair("石油行业", "BK0438"),
+            "601899" to Pair("有色金属", "BK0478"),
+            "600111" to Pair("有色金属", "BK0478"),
+            "002460" to Pair("能源金属", "BK1015"),
+            "002466" to Pair("能源金属", "BK1015"),
+            "601919" to Pair("航运港口", "BK0450"),
+            "000002" to Pair("房地产开发", "BK0451"),
+            "600048" to Pair("房地产开发", "BK0451"),
+            "000651" to Pair("白色家电", "BK1239"),
+            "000333" to Pair("白色家电", "BK1239"),
+            "600690" to Pair("白色家电", "BK1239"),
+            "002602" to Pair("游戏", "BK1046"),
+            "300418" to Pair("游戏", "BK1046"),
+            "002555" to Pair("游戏", "BK1046"),
+            "300113" to Pair("游戏", "BK1046"),
+            "300459" to Pair("游戏", "BK1046"),
+            "601012" to Pair("光伏设备", "BK1031"),
+            "300274" to Pair("光伏设备", "BK1031"),
+            "600438" to Pair("光伏设备", "BK1031"),
+            "688599" to Pair("光伏设备", "BK1031"),
+            "688223" to Pair("光伏设备", "BK1031"),
+            "300017" to Pair("通信服务", "BK0736"),
+            "600050" to Pair("通信服务", "BK0736"),
+            "600941" to Pair("通信服务", "BK0736"),
+            "601728" to Pair("通信服务", "BK0736")
+        )
+
         val FALLBACK_INDICES = listOf(
             MarketIndex("000001.SS", "上证指数", 3830.45, 6.83, 0.18),
             MarketIndex("399001.SZ", "深证成指", 12901.95, 43.20, 0.34),

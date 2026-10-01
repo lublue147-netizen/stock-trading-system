@@ -101,6 +101,9 @@ fun AppNavigation(
                 onStockClick = { symbol ->
                     navController.navigate(Screen.StockDetail.createRoute(symbol))
                 },
+                onSectorClick = { targetBk, targetName ->
+                    navController.navigate(Screen.SectorDetail.createRoute(targetBk, targetName))
+                },
                 onBack = { navController.popBackStack() }
             )
         }

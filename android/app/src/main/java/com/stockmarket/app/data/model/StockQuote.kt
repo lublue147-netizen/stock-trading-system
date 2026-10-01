@@ -62,6 +62,8 @@ data class StockQuote(
     @Json(name = "bps") val bps: Double? = null,                       // 每股净资产
     @Json(name = "roe") val roe: Double? = null,                       // 净资产收益率 %
     @Json(name = "industry") val industry: String? = null,             // 所属行业
+    @Json(name = "industryBkCode") val industryBkCode: String? = null, // 所属东财二级行业BK代码
+    @Json(name = "industryChangePercent") val industryChangePercent: Double? = null, // 所属行业当前涨跌幅 %
     @Json(name = "mainBusiness") val mainBusiness: String? = null,     // 主营业务
     @Json(name = "conceptTags") val conceptTags: List<String> = emptyList(), // 概念题材板块
     @Json(name = "weibi") val weibi: Double = 0.0,                     // 委比 %
@@ -69,6 +71,10 @@ data class StockQuote(
     @Json(name = "bids") val bids: List<OrderBookEntry> = emptyList(), // 买1~买5
     @Json(name = "asks") val asks: List<OrderBookEntry> = emptyList()  // 卖5~卖1
 ) {
+    val isIndex: Boolean
+        get() = symbol in listOf("000001.SS", "399001.SZ", "399006.SZ", "000688.SS", "000300.SS", "899050.BJ") ||
+                name.contains("指数") || name.contains("成指") || symbol.startsWith("sh000") || symbol.startsWith("sz399")
+
     val isAShare: Boolean
         get() = symbol.endsWith(".SS") || symbol.endsWith(".SZ") || symbol.endsWith(".BJ") ||
                 symbol.matches(Regex("^[0-9]{6}(\\.[A-Za-z]+)?$"))
@@ -81,6 +87,7 @@ data class StockQuote(
 
     val exchangeBadge: String
         get() = when {
+            isIndex -> "指数"
             symbol.endsWith(".SS") || symbol.substringBefore(".").startsWith("6") -> "沪A"
             symbol.endsWith(".SZ") || symbol.substringBefore(".").startsWith("0") || symbol.substringBefore(".").startsWith("3") -> "深A"
             symbol.endsWith(".BJ") || symbol.substringBefore(".").startsWith("8") || symbol.substringBefore(".").startsWith("4") -> "京A"

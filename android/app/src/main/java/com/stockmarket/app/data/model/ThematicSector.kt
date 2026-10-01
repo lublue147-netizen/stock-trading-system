@@ -21,7 +21,10 @@ data class ThematicStockItem(
     val changePercent: Double,
     val boardCount: Int? = null,
     val tag: String,
-    val subDetail: String
+    val subDetail: String,
+    val industry: String? = null,
+    val industryBkCode: String? = null,
+    val industryChangePercent: Double? = null
 )
 
 data class MarketBreadth(

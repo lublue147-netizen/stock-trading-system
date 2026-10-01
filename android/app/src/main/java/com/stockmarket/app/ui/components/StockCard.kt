@@ -24,6 +24,7 @@ import java.util.Locale
 fun StockCard(
     quote: StockQuote,
     onClick: () -> Unit,
+    onSectorClick: ((String, String) -> Unit)? = null,
     onRemove: (() -> Unit)? = null,
     modifier: Modifier = Modifier
 ) {
@@ -82,12 +83,25 @@ fun StockCard(
                     }
                 }
                 Spacer(modifier = Modifier.height(3.dp))
-                Text(
-                    text = quote.name,
-                    color = TextSecondary,
-                    fontSize = 12.sp,
-                    maxLines = 1
-                )
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        text = quote.name,
+                        color = TextSecondary,
+                        fontSize = 12.sp,
+                        maxLines = 1
+                    )
+                    if (!isSector && !quote.industry.isNullOrEmpty() && !quote.industryBkCode.isNullOrEmpty()) {
+                        Spacer(modifier = Modifier.width(6.dp))
+                        IndustryTagPill(
+                            industryName = quote.industry,
+                            bkCode = quote.industryBkCode,
+                            changePercent = quote.industryChangePercent,
+                            onClick = if (onSectorClick != null) {
+                                { onSectorClick(quote.industryBkCode, quote.industry) }
+                            } else null
+                        )
+                    }
+                }
             }
 
             // Right: Price & Change Pill

@@ -29,6 +29,7 @@ import androidx.compose.ui.unit.sp
 import com.stockmarket.app.data.model.ThematicStockItem
 import com.stockmarket.app.ui.components.CandlestickChart
 import com.stockmarket.app.ui.components.ChartType
+import com.stockmarket.app.ui.components.IndustryTagPill
 import com.stockmarket.app.ui.theme.*
 import java.util.Locale
 
@@ -48,6 +49,7 @@ enum class SectorSortOrder {
 fun SectorDetailScreen(
     viewModel: SectorDetailViewModel,
     onStockClick: (String) -> Unit,
+    onSectorClick: (String, String) -> Unit,
     onBack: () -> Unit
 ) {
     val state by viewModel.uiState.collectAsState()
@@ -412,6 +414,7 @@ fun SectorDetailScreen(
                             stock = stock,
                             isWatchlisted = viewModel.isStockWatchlisted(stock.symbol),
                             onClick = { onStockClick(stock.symbol) },
+                            onSectorClick = onSectorClick,
                             onToggleWatchlist = { viewModel.toggleStockWatchlist(stock.symbol) }
                         )
                         HorizontalDivider(color = SurfaceBorder.copy(alpha = 0.5f), thickness = 0.8.dp)
@@ -441,6 +444,7 @@ private fun ConstituentStockRow(
     stock: ThematicStockItem,
     isWatchlisted: Boolean,
     onClick: () -> Unit,
+    onSectorClick: ((String, String) -> Unit)? = null,
     onToggleWatchlist: () -> Unit
 ) {
     val stockColors = LocalStockColors.current
@@ -507,6 +511,17 @@ private fun ConstituentStockRow(
                                 fontWeight = FontWeight.Bold
                             )
                         }
+                    }
+                    if (!stock.industry.isNullOrEmpty() && !stock.industryBkCode.isNullOrEmpty()) {
+                        Spacer(modifier = Modifier.width(4.dp))
+                        IndustryTagPill(
+                            industryName = stock.industry,
+                            bkCode = stock.industryBkCode,
+                            changePercent = stock.industryChangePercent,
+                            onClick = if (onSectorClick != null) {
+                                { onSectorClick(stock.industryBkCode, stock.industry) }
+                            } else null
+                        )
                     }
                 }
             }

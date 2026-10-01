@@ -141,7 +141,10 @@ fun WatchlistScreen(
                                 horizontalArrangement = Arrangement.spacedBy(10.dp)
                             ) {
                                 items(state.indices) { index ->
-                                    MarketIndexCard(index = index)
+                                    MarketIndexCard(
+                                        index = index,
+                                        onClick = { onStockClick(index.symbol) }
+                                    )
                                 }
                             }
                         }
@@ -317,6 +320,7 @@ fun WatchlistScreen(
                                         onStockClick(quote.symbol)
                                     }
                                 },
+                                onSectorClick = onSectorClick,
                                 onRemove = { viewModel.removeSymbol(quote.symbol) }
                             )
                         }

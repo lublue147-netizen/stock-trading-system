@@ -12,13 +12,15 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.stockmarket.app.data.model.MarketIndex
+import androidx.compose.foundation.clickable
 import com.stockmarket.app.ui.theme.*
 import java.util.Locale
 
 @Composable
 fun MarketIndexCard(
     index: MarketIndex,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    onClick: (() -> Unit)? = null
 ) {
     val stockColors = LocalStockColors.current
     val isPositive = index.change >= 0
@@ -30,6 +32,7 @@ fun MarketIndexCard(
             .width(130.dp)
             .clip(RoundedCornerShape(10.dp))
             .background(SurfaceCard)
+            .then(if (onClick != null) Modifier.clickable(onClick = onClick) else Modifier)
             .padding(10.dp)
     ) {
         Column {

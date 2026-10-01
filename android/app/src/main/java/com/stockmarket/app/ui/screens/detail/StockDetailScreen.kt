@@ -101,8 +101,9 @@ fun StockDetailScreen(
                             )
                             Spacer(modifier = Modifier.width(6.dp))
                             // Exchange Badge (深A / 沪A / 京A)
-                            val badge = quote?.exchangeBadge ?: "沪A"
+                            val badge = quote?.exchangeBadge ?: if (state.symbol in listOf("000001.SS", "399001.SZ", "399006.SZ", "000688.SS", "000300.SS", "899050.BJ")) "指数" else "沪A"
                             val badgeBg = when {
+                                badge == "指数" -> EastMoneyOrange.copy(alpha = 0.2f)
                                 badge.startsWith("沪") -> EastMoneyRed.copy(alpha = 0.2f)
                                 badge.startsWith("深") -> Color(0xFF2563EB).copy(alpha = 0.2f)
                                 badge.startsWith("京") || badge.startsWith("北") -> Color(0xFF059669).copy(alpha = 0.2f)
@@ -110,6 +111,7 @@ fun StockDetailScreen(
                                 else -> Color(0xFF4B5563).copy(alpha = 0.2f)
                             }
                             val badgeColor = when {
+                                badge == "指数" -> EastMoneyOrange
                                 badge.startsWith("沪") -> Color(0xFFF87171)
                                 badge.startsWith("深") -> Color(0xFF60A5FA)
                                 badge.startsWith("京") || badge.startsWith("北") -> Color(0xFF34D399)
