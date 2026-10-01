@@ -483,6 +483,7 @@ fun StockDetailScreen(
                     onSelectDateClick = { showDatePickerDialog = true },
                     onResetToday = { viewModel.resetToToday() },
                     onReturnToKLine = if (state.previousKLineRange != null) { { viewModel.returnToKLine() } } else null
+                )
             }
 
             Spacer(modifier = Modifier.height(8.dp))
