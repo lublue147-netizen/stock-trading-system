@@ -348,26 +348,7 @@ class StockRepository(
         }
 
         val (constituents, totalCount) = fetchEastMoneySectorConstituentsFull(clean, maxItems = 1500)
-        val finalConstituents = if (constituents.isNotEmpty()) {
-            constituents
-        } else {
-            // Fallback to local definitions if any
-            val defType = ThematicSectorType.values().firstOrNull { it.bkCode == clean }
-            if (defType != null) {
-                THEMATIC_STOCK_DEFS.filter { it.sectorType == defType }.map { def ->
-                    ThematicStockItem(
-                        symbol = def.symbol,
-                        name = def.defaultName,
-                        price = 10.0,
-                        change = 0.0,
-                        changePercent = 0.0,
-                        boardCount = def.boardCount,
-                        tag = def.tag,
-                        subDetail = def.subDetail
-                    )
-                }
-            } else emptyList()
-        }
+        val finalConstituents = constituents
         val enrichedConstituents = enrichConstituentsWithIndustry(
             items = finalConstituents,
             currentSectorBkCode = clean,
@@ -428,7 +409,9 @@ class StockRepository(
         }
 
         val result = SectorDetailResult(quote, enrichedConstituents, finalTotal)
-        sectorDetailCache[clean] = Pair(System.currentTimeMillis(), result)
+        if (enrichedConstituents.isNotEmpty()) {
+            sectorDetailCache[clean] = Pair(System.currentTimeMillis(), result)
+        }
         Result.success(result)
     }
 
@@ -904,147 +887,168 @@ class StockRepository(
     private fun fetchEastMoneySectorConstituentsPage(
         bkCode: String,
         page: Int = 1,
-        pageSize: Int = 500
+        pageSize: Int = 100
     ): Pair<List<ThematicStockItem>, Int> {
         val rawClean = bkCode.trim().uppercase()
-        val clean = if (!rawClean.startsWith("BK") && rawClean.matches(Regex("^[0-9]{4,6}$"))) "BK$rawClean" else rawClean
+        val resolvedCode = when {
+            rawClean.startsWith("BK") -> rawClean
+            rawClean.matches(Regex("^[0-9]{4,6}$")) -> "BK$rawClean"
+            else -> {
+                ThematicSectorType.values().firstOrNull { it.title == rawClean || it.name == rawClean }?.bkCode
+                    ?: StockIndustryRegistry.findBkCodeForIndustry(rawClean)
+            }
+        }
+        val clean = resolvedCode.ifEmpty { rawClean }
         val isIndustrySector = StockIndustryRegistry.isIndustrySector(clean)
         val defaultIndName = StockIndustryRegistry.getSectorName(clean)
 
-        // Try two UT tokens: primary (web) + fallback (mobile app)
+        // Multiple fallback strategies:
+        // 1. fs: Eastmoney quote center uses "b:BK1638+f:!50", but some sectors use "b:BK1638"
+        val fsCandidates = listOf("b:$clean+f:!50", "b:$clean")
+        // 2. ut: Eastmoney web quote center token vs mobile app token
         val utTokens = listOf(
-            "bd1d9ddb04089700cf9c27f6f7426281",
-            "fa5fd1943c7b386f172d6893dbfba10b"
+            "fa5fd1943c7b386f172d6893dbfba10b",
+            "bd1d9ddb04089700cf9c27f6f7426281"
+        )
+        // 3. hosts: Primary load balancer and node fallbacks
+        val hosts = listOf(
+            "push2.eastmoney.com",
+            "29.push2.eastmoney.com",
+            "pushguest.eastmoney.com"
         )
 
-        for (ut in utTokens) {
-            val url = "https://push2.eastmoney.com/api/qt/clist/get?pn=$page&pz=$pageSize&po=1&np=1&ut=$ut&fltt=2&invt=2&fid=f3&fs=b:$clean&fields=f12,f14,f2,f3,f4,f5,f6,f7,f15,f16,f17,f18,f100"
-            try {
-                val request = Request.Builder()
-                    .url(url)
-                    .header("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
-                    .header("Referer", "https://quote.eastmoney.com/")
-                    .header("Accept", "*/*")
-                    .build()
+        for (host in hosts) {
+            for (ut in utTokens) {
+                for (fsParam in fsCandidates) {
+                    val url = "https://$host/api/qt/clist/get?pn=$page&pz=$pageSize&po=1&np=1&ut=$ut&fltt=2&invt=2&fid=f3&fs=$fsParam&fields=f12,f14,f2,f3,f4,f5,f6,f7,f15,f16,f17,f18,f100&dect=1&wbp2u=|0|0|0|web"
+                    try {
+                        val request = Request.Builder()
+                            .url(url)
+                            .header("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
+                            .header("Referer", "https://quote.eastmoney.com/")
+                            .header("Accept", "*/*")
+                            .build()
 
-                val response = ApiClient.okHttpClient.newCall(request).execute()
-                android.util.Log.d("SectorFetch", "[$clean] p=$page ut=${ut.take(8)} HTTP ${response.code}")
-                if (!response.isSuccessful) { response.close(); continue }
-                val bodyStr = response.body?.string()?.trim()?.removePrefix("\uFEFF") ?: continue
-                android.util.Log.d("SectorFetch", "[$clean] bodyLen=${bodyStr.length} head=${bodyStr.take(100)}")
-                val rootObj = JSONObject(bodyStr)
-                val dataNode = rootObj.opt("data")
-                android.util.Log.d("SectorFetch", "[$clean] data=${dataNode?.javaClass?.simpleName} val=${dataNode?.toString()?.take(60)}")
-                val dataObj = rootObj.optJSONObject("data") ?: run {
-                    android.util.Log.w("SectorFetch", "[$clean] data null/non-object, try next ut")
-                    continue
-                }
-                val total = dataObj.optInt("total", 0)
-                android.util.Log.d("SectorFetch", "[$clean] total=$total")
-
-                val jsonObjects = mutableListOf<JSONObject>()
-                val diffArr = dataObj.optJSONArray("diff")
-                if (diffArr != null) {
-                    android.util.Log.d("SectorFetch", "[$clean] diff=array len=${diffArr.length()}")
-                    for (i in 0 until diffArr.length()) {
-                        diffArr.optJSONObject(i)?.let { jsonObjects.add(it) }
-                    }
-                } else {
-                    val diffObj = dataObj.optJSONObject("diff")
-                    if (diffObj != null) {
-                        android.util.Log.d("SectorFetch", "[$clean] diff=object len=${diffObj.length()}")
-                        val keyList = mutableListOf<String>()
-                        val keys = diffObj.keys()
-                        while (keys.hasNext()) keyList.add(keys.next())
-                        keyList.sortWith(compareBy { it.toIntOrNull() ?: Int.MAX_VALUE })
-                        for (k in keyList) diffObj.optJSONObject(k)?.let { jsonObjects.add(it) }
-                    } else {
-                        android.util.Log.w("SectorFetch", "[$clean] diff=null")
-                    }
-                }
-                android.util.Log.d("SectorFetch", "[$clean] parsed=${jsonObjects.size}")
-
-                val items = mutableListOf<ThematicStockItem>()
-                for (d in jsonObjects) {
-                    val code = d.optString("f12", "").trim()
-                    val name = d.optString("f14", "").trim()
-                    if (code.isEmpty() || name.isEmpty() || name == "-") continue
-
-                    val rawPrice = d.optDouble("f2", Double.NaN)
-                    val prevClose = d.optDouble("f18", Double.NaN)
-                    val price = when {
-                        !rawPrice.isNaN() && rawPrice > 0.0 -> rawPrice
-                        !prevClose.isNaN() && prevClose > 0.0 -> prevClose
-                        else -> 0.0
-                    }
-                    val rawChgPct = d.optDouble("f3", Double.NaN)
-                    val chgPct = if (!rawChgPct.isNaN()) rawChgPct else 0.0
-                    val rawChg = d.optDouble("f4", Double.NaN)
-                    val chg = if (!rawChg.isNaN()) rawChg else 0.0
-                    val turnover = d.optDouble("f6", 0.0)
-                    val turnoverRate = d.optDouble("f7", 0.0)
-
-                    val fullSymbol = when {
-                        code.startsWith("6") || code.startsWith("9") -> "$code.SS"
-                        code.startsWith("8") || code.startsWith("4") || code.startsWith("920") -> "$code.BJ"
-                        else -> "$code.SZ"
-                    }
-
-                    val apiIndName = d.optString("f100", "").trim().takeIf { it.isNotEmpty() && it != "-" }
-                    val (indName, indBk) = when {
-                        apiIndName != null -> {
-                            val bk = StockIndustryRegistry.findBkCodeForIndustry(apiIndName)
-                            Pair(apiIndName, bk)
+                        val response = ApiClient.okHttpClient.newCall(request).execute()
+                        if (!response.isSuccessful) {
+                            response.close()
+                            continue
                         }
-                        isIndustrySector -> Pair(defaultIndName, clean)
-                        else -> StockIndustryRegistry.resolveStockIndustryLocally(fullSymbol)
-                    }
+                        val bodyStr = response.body?.string()?.trim()?.removePrefix("\uFEFF") ?: continue
+                        if (bodyStr.isEmpty() || bodyStr.startsWith("<")) continue
+                        val rootObj = try { JSONObject(bodyStr) } catch (_: Exception) { continue }
+                        val dataObj = rootObj.optJSONObject("data")
+                        if (dataObj == null) {
+                            android.util.Log.w("SectorFetch", "[$clean] host=$host ut=${ut.take(6)} fs=$fsParam data is null")
+                            continue
+                        }
+                        val total = dataObj.optInt("total", 0)
 
-                    if (!indName.isNullOrEmpty() && !indBk.isNullOrEmpty()) {
-                        StockIndustryRegistry.cacheIndustry(code, indName, indBk)
-                    }
+                        val jsonObjects = mutableListOf<JSONObject>()
+                        val diffArr = dataObj.optJSONArray("diff")
+                        if (diffArr != null) {
+                            for (i in 0 until diffArr.length()) {
+                                diffArr.optJSONObject(i)?.let { jsonObjects.add(it) }
+                            }
+                        } else {
+                            val diffObj = dataObj.optJSONObject("diff")
+                            if (diffObj != null) {
+                                val keyList = mutableListOf<String>()
+                                val keys = diffObj.keys()
+                                while (keys.hasNext()) keyList.add(keys.next())
+                                keyList.sortWith(compareBy { it.toIntOrNull() ?: Int.MAX_VALUE })
+                                for (k in keyList) diffObj.optJSONObject(k)?.let { jsonObjects.add(it) }
+                            }
+                        }
 
-                    val isSuspended = (rawPrice.isNaN() || rawPrice <= 0.0) && (!prevClose.isNaN() && prevClose > 0.0)
-                    val tag = when {
-                        isSuspended -> "停牌"
-                        chgPct >= 19.8 -> "20cm涨停"
-                        chgPct >= 9.8 -> "涨停领跑"
-                        chgPct >= 5.0 -> "多头主升"
-                        chgPct >= 0.0 -> "红盘趋势"
-                        else -> "高位蓄势"
+                        if (jsonObjects.isEmpty()) {
+                            continue
+                        }
+
+                        val items = mutableListOf<ThematicStockItem>()
+                        for (d in jsonObjects) {
+                            val code = d.optString("f12", "").trim()
+                            val name = d.optString("f14", "").trim()
+                            if (code.isEmpty() || name.isEmpty() || name == "-") continue
+
+                            val rawPrice = d.optDouble("f2", Double.NaN)
+                            val prevClose = d.optDouble("f18", Double.NaN)
+                            val price = when {
+                                !rawPrice.isNaN() && rawPrice > 0.0 -> rawPrice
+                                !prevClose.isNaN() && prevClose > 0.0 -> prevClose
+                                else -> 0.0
+                            }
+                            val rawChgPct = d.optDouble("f3", Double.NaN)
+                            val chgPct = if (!rawChgPct.isNaN()) rawChgPct else 0.0
+                            val rawChg = d.optDouble("f4", Double.NaN)
+                            val chg = if (!rawChg.isNaN()) rawChg else 0.0
+                            val turnover = d.optDouble("f6", 0.0)
+                            val turnoverRate = d.optDouble("f7", 0.0)
+
+                            val fullSymbol = when {
+                                code.startsWith("6") || code.startsWith("9") -> "$code.SS"
+                                code.startsWith("8") || code.startsWith("4") || code.startsWith("920") -> "$code.BJ"
+                                else -> "$code.SZ"
+                            }
+
+                            val apiIndName = d.optString("f100", "").trim().takeIf { it.isNotEmpty() && it != "-" }
+                            val (indName, indBk) = when {
+                                apiIndName != null -> {
+                                    val bk = StockIndustryRegistry.findBkCodeForIndustry(apiIndName)
+                                    Pair(apiIndName, bk)
+                                }
+                                isIndustrySector -> Pair(defaultIndName, clean)
+                                else -> StockIndustryRegistry.resolveStockIndustryLocally(fullSymbol)
+                            }
+
+                            if (!indName.isNullOrEmpty() && !indBk.isNullOrEmpty()) {
+                                StockIndustryRegistry.cacheIndustry(code, indName, indBk)
+                            }
+
+                            val isSuspended = (rawPrice.isNaN() || rawPrice <= 0.0) && (!prevClose.isNaN() && prevClose > 0.0)
+                            val tag = when {
+                                isSuspended -> "停牌"
+                                chgPct >= 19.8 -> "20cm涨停"
+                                chgPct >= 9.8 -> "涨停领跑"
+                                chgPct >= 5.0 -> "多头主升"
+                                chgPct >= 0.0 -> "红盘趋势"
+                                else -> "高位蓄势"
+                            }
+                            items.add(
+                                ThematicStockItem(
+                                    symbol = fullSymbol,
+                                    name = name,
+                                    price = price,
+                                    change = chg,
+                                    changePercent = chgPct,
+                                    boardCount = if (chgPct >= 9.8) 1 else null,
+                                    tag = tag,
+                                    subDetail = "东财${clean}成分股",
+                                    industry = indName,
+                                    industryBkCode = indBk,
+                                    industryChangePercent = null,
+                                    turnoverAmount = turnover,
+                                    turnoverRate = turnoverRate
+                                )
+                            )
+                        }
+
+                        if (items.isNotEmpty()) {
+                            android.util.Log.d("SectorFetch", "[$clean] p=$page SUCCESS via host=$host fs=$fsParam ut=${ut.take(6)}: ${items.size} items, total=$total")
+                            return Pair(items, total)
+                        }
+                    } catch (e: Exception) {
+                        android.util.Log.w("SectorFetch", "[$clean] attempt failed ($host, $fsParam): ${e.message}")
                     }
-                    items.add(
-                        ThematicStockItem(
-                            symbol = fullSymbol,
-                            name = name,
-                            price = price,
-                            change = chg,
-                            changePercent = chgPct,
-                            boardCount = if (chgPct >= 9.8) 1 else null,
-                            tag = tag,
-                            subDetail = "东财${clean}成分股",
-                            industry = indName,
-                            industryBkCode = indBk,
-                            industryChangePercent = null,
-                            turnoverAmount = turnover,
-                            turnoverRate = turnoverRate
-                        )
-                    )
                 }
-                android.util.Log.d("SectorFetch", "[$clean] returning items=${items.size} total=$total")
-                return Pair(items, total)
-            } catch (e: Exception) {
-                android.util.Log.e("SectorFetch", "[$clean] exception: ${e.javaClass.simpleName}: ${e.message}")
             }
         }
         return Pair(emptyList(), 0)
     }
 
-
     private fun fetchEastMoneySectorConstituents(bkCode: String, limit: Int = 15): List<ThematicStockItem> {
         return fetchEastMoneySectorConstituentsPage(bkCode, page = 1, pageSize = limit).first
     }
-
 
     private fun fetchEastMoneySectorConstituentsFull(bkCode: String, maxItems: Int = 2000): Pair<List<ThematicStockItem>, Int> {
         val clean = bkCode.trim().uppercase()
@@ -1052,8 +1056,8 @@ class StockRepository(
         val seenSymbols = HashSet<String>()
         var reportedTotal = 0
 
-        // Page 1 — use pz=500 so most sectors (≤500 stocks) are done in 1 request
-        val (page1Items, total) = fetchEastMoneySectorConstituentsPage(clean, page = 1, pageSize = 500)
+        // Page 1 — canonical Eastmoney pageSize = 100
+        val (page1Items, total) = fetchEastMoneySectorConstituentsPage(clean, page = 1, pageSize = 100)
         android.util.Log.d("SectorPagination", "[$clean] page1: ${page1Items.size} items, total=$total")
         for (item in page1Items) {
             if (seenSymbols.add(item.symbol)) {
@@ -1062,13 +1066,13 @@ class StockRepository(
         }
         reportedTotal = total
 
-        // Only paginate if there are more than 500 stocks
-        val targetCount = if (reportedTotal > 0) reportedTotal else if (page1Items.size == 500) maxItems else page1Items.size
-        if (targetCount > 500 && page1Items.isNotEmpty()) {
-            val totalPages = minOf((targetCount + 499) / 500, (maxItems + 499) / 500)
+        // If total reported is greater than 100 or page 1 was full (100 items), fetch remaining pages
+        val targetCount = if (reportedTotal > 0) reportedTotal else if (page1Items.size == 100) maxItems else page1Items.size
+        if (targetCount > 100 && page1Items.isNotEmpty()) {
+            val totalPages = minOf((targetCount + 99) / 100, (maxItems + 99) / 100)
             android.util.Log.d("SectorPagination", "[$clean] needs $totalPages pages (target=$targetCount)")
             for (p in 2..totalPages) {
-                val (pageItems, _) = fetchEastMoneySectorConstituentsPage(clean, page = p, pageSize = 500)
+                val (pageItems, _) = fetchEastMoneySectorConstituentsPage(clean, page = p, pageSize = 100)
                 android.util.Log.d("SectorPagination", "[$clean] page$p: ${pageItems.size} items")
                 if (pageItems.isEmpty()) break
                 for (item in pageItems) {
@@ -1076,7 +1080,7 @@ class StockRepository(
                         allItems.add(item)
                     }
                 }
-                if (pageItems.size < 500) break
+                if (pageItems.size < 100) break
             }
         }
 
