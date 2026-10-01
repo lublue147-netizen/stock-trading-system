@@ -301,7 +301,8 @@ fun SectorDetailScreen(
                         }
                     }
                 } else {
-                    itemsIndexed(state.constituents, key = { _, stock -> stock.symbol }) { index, stock ->
+                    val distinctConstituents = state.constituents.distinctBy { it.symbol }
+                    itemsIndexed(distinctConstituents, key = { _, stock -> stock.symbol }) { index, stock ->
                         ConstituentStockRow(
                             rank = index + 1,
                             stock = stock,

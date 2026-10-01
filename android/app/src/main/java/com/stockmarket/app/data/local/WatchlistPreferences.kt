@@ -55,18 +55,44 @@ class WatchlistPreferences(context: Context) {
                     s.endsWith(".SS") || s.endsWith(".SZ") || s.endsWith(".BJ") ||
                     s.matches(Regex("^[0-9]{6}(\\.[A-Za-z]+)?$"))
         }
+
+        private fun computeAllSymbols(groups: List<WatchlistGroup>): List<String> {
+            val result = mutableListOf<String>()
+            for (g in groups) {
+                for (s in g.symbols) {
+                    if (!result.contains(s)) {
+                        result.add(s)
+                    }
+                }
+            }
+            return result
+        }
     }
 
-    private val _groupsFlow = MutableStateFlow(loadGroups())
-    val groupsFlow: StateFlow<List<WatchlistGroup>> = _groupsFlow.asStateFlow()
+    private val _groupsFlow: MutableStateFlow<List<WatchlistGroup>>
+    val groupsFlow: StateFlow<List<WatchlistGroup>>
 
-    private val _selectedGroupFlow = MutableStateFlow(getSelectedGroup())
-    val selectedGroupFlow: StateFlow<String> = _selectedGroupFlow.asStateFlow()
+    private val _selectedGroupFlow: MutableStateFlow<String>
+    val selectedGroupFlow: StateFlow<String>
 
-    private val _watchlistFlow = MutableStateFlow(getAllSymbols().toSet())
-    val watchlistFlow: StateFlow<Set<String>> = _watchlistFlow.asStateFlow()
+    private val _watchlistFlow: MutableStateFlow<Set<String>>
+    val watchlistFlow: StateFlow<Set<String>>
 
-    private fun loadGroups(): List<WatchlistGroup> {
+    init {
+        val initialGroups = readGroupsFromPrefs()
+        _groupsFlow = MutableStateFlow(initialGroups)
+        groupsFlow = _groupsFlow.asStateFlow()
+
+        val initialSelected = prefs.getString(KEY_SELECTED_GROUP, GROUP_ALL) ?: GROUP_ALL
+        _selectedGroupFlow = MutableStateFlow(initialSelected)
+        selectedGroupFlow = _selectedGroupFlow.asStateFlow()
+
+        val allSymbols = computeAllSymbols(initialGroups)
+        _watchlistFlow = MutableStateFlow(allSymbols.toSet())
+        watchlistFlow = _watchlistFlow.asStateFlow()
+    }
+
+    private fun readGroupsFromPrefs(): List<WatchlistGroup> {
         val rawJson = prefs.getString(KEY_GROUPS, null)
         if (!rawJson.isNullOrBlank()) {
             try {
@@ -103,7 +129,23 @@ class WatchlistPreferences(context: Context) {
             WatchlistGroup(GROUP_DEFAULT, defaultStockSymbols),
             WatchlistGroup(GROUP_SECTORS, DEFAULT_SECTOR_SYMBOLS)
         )
-        saveGroups(initial)
+
+        // Write directly to SharedPreferences (DO NOT touch StateFlows here!)
+        try {
+            val arr = JSONArray()
+            for (g in initial) {
+                val obj = JSONObject()
+                obj.put("name", g.name)
+                val symArr = JSONArray()
+                g.symbols.forEach { symArr.put(it) }
+                obj.put("symbols", symArr)
+                arr.put(obj)
+            }
+            prefs.edit().putString(KEY_GROUPS, arr.toString()).apply()
+            val all = computeAllSymbols(initial)
+            prefs.edit().putStringSet(KEY_WATCHLIST, all.toSet()).apply()
+        } catch (_: Exception) {}
+
         return initial
     }
 
@@ -124,9 +166,11 @@ class WatchlistPreferences(context: Context) {
         } catch (_: Exception) {}
 
         _groupsFlow.value = groups
-        val allSyms = getAllSymbols()
+        val allSyms = computeAllSymbols(groups)
         _watchlistFlow.value = allSyms.toSet()
-        prefs.edit().putStringSet(KEY_WATCHLIST, allSyms.toSet()).apply()
+        try {
+            prefs.edit().putStringSet(KEY_WATCHLIST, allSyms.toSet()).apply()
+        } catch (_: Exception) {}
     }
 
     fun getSelectedGroup(): String {
@@ -190,17 +234,7 @@ class WatchlistPreferences(context: Context) {
         return group?.symbols ?: emptyList()
     }
 
-    fun getAllSymbols(): List<String> {
-        val result = mutableListOf<String>()
-        for (g in getGroups()) {
-            for (s in g.symbols) {
-                if (!result.contains(s)) {
-                    result.add(s)
-                }
-            }
-        }
-        return result
-    }
+    fun getAllSymbols(): List<String> = computeAllSymbols(getGroups())
 
     fun addSymbolToGroup(symbol: String, groupName: String? = null): Boolean {
         val clean = symbol.trim().uppercase()

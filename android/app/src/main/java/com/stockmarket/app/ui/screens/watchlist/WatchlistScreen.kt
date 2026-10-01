@@ -304,7 +304,8 @@ fun WatchlistScreen(
                         }
                     }
                 } else {
-                    items(state.quotes, key = { it.symbol }) { quote ->
+                    val distinctQuotes = state.quotes.distinctBy { it.symbol }
+                    items(distinctQuotes, key = { it.symbol }) { quote ->
                         val isSector = quote.symbol.startsWith("BK")
                         Box(modifier = Modifier.padding(horizontal = 16.dp, vertical = 5.dp)) {
                             StockCard(
