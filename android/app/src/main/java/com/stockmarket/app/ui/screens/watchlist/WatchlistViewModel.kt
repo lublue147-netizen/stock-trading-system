@@ -2,8 +2,11 @@ package com.stockmarket.app.ui.screens.watchlist
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.stockmarket.app.data.model.MarketBreadth
 import com.stockmarket.app.data.model.MarketIndex
 import com.stockmarket.app.data.model.StockQuote
+import com.stockmarket.app.data.model.ThematicSectorType
+import com.stockmarket.app.data.model.ThematicStockItem
 import com.stockmarket.app.data.repository.StockRepository
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -19,6 +22,9 @@ data class WatchlistUiState(
     val isRefreshing: Boolean = false,
     val quotes: List<StockQuote> = emptyList(),
     val indices: List<MarketIndex> = emptyList(),
+    val selectedThematicSector: ThematicSectorType = ThematicSectorType.MULTI_BOARD,
+    val thematicSectors: Map<ThematicSectorType, List<ThematicStockItem>> = emptyMap(),
+    val marketBreadth: MarketBreadth = MarketBreadth(),
     val errorMessage: String? = null
 )
 
@@ -36,6 +42,10 @@ class WatchlistViewModel(
         startAutoRefresh()
     }
 
+    fun selectThematicSector(type: ThematicSectorType) {
+        _uiState.update { it.copy(selectedThematicSector = type) }
+    }
+
     fun loadData(isInitial: Boolean = false) {
         viewModelScope.launch {
             if (isInitial) {
@@ -46,6 +56,8 @@ class WatchlistViewModel(
 
             val quotesResult = repository.getWatchlistQuotes()
             val indicesResult = repository.getMarketIndices()
+            val thematicResult = repository.getThematicSectors()
+            val breadthResult = repository.getMarketBreadth()
 
             _uiState.update { state ->
                 state.copy(
@@ -53,6 +65,8 @@ class WatchlistViewModel(
                     isRefreshing = false,
                     quotes = quotesResult.getOrDefault(emptyList()),
                     indices = indicesResult.getOrDefault(emptyList()),
+                    thematicSectors = thematicResult.getOrDefault(emptyMap()),
+                    marketBreadth = breadthResult.getOrDefault(MarketBreadth()),
                     errorMessage = null
                 )
             }

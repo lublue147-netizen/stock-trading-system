@@ -42,6 +42,7 @@ enum class ChartType {
 @Composable
 fun CandlestickChart(
     candles: List<CandlePoint>,
+    symbol: String? = null,
     chartType: ChartType = ChartType.CANDLESTICK,
     previousClose: Double? = null,
     modifier: Modifier = Modifier,
@@ -60,6 +61,17 @@ fun CandlestickChart(
             Text("暂无行情分时/K线数据", color = TextSecondary, fontSize = 14.sp)
         }
         return
+    }
+
+    val limitRate: Double = remember(symbol, previousClose) {
+        val s = symbol?.uppercase() ?: ""
+        when {
+            s.contains("ST") -> 0.05
+            s.startsWith("30") || s.startsWith("68") || s.contains("300") || s.contains("688") -> 0.20
+            s.endsWith(".BJ") || s.startsWith("8") || s.startsWith("4") || s.startsWith("920") -> 0.30
+            s.startsWith("^") || s.startsWith("000001.SS") || s.startsWith("399") -> 0.10
+            else -> 0.10
+        }
     }
 
     var selectedIndex by remember { mutableStateOf<Int?>(null) }
@@ -220,88 +232,93 @@ fun CandlestickChart(
 
         Spacer(modifier = Modifier.height(6.dp))
 
-        // Main Chart Canvas
-        Canvas(
+        // Main Chart Canvas Container with Fixed Limit Up / Limit Down Coordinate Overlay
+        Box(
             modifier = Modifier
                 .fillMaxWidth()
                 .height(250.dp)
-                .pointerInput(candles) {
-                    detectTapGestures(
-                        onPress = { offset ->
-                            selectedIndex = calculateCandleIndex(offset.x, size.width.toFloat(), candles.size)
-                        },
-                        onTap = { offset ->
-                            selectedIndex = calculateCandleIndex(offset.x, size.width.toFloat(), candles.size)
-                        },
-                        onDoubleTap = { offset ->
-                            val idx = calculateCandleIndex(offset.x, size.width.toFloat(), candles.size)
-                            selectedIndex = idx
-                            if (chartType == ChartType.CANDLESTICK && onViewIntradayForDate != null) {
-                                candles.getOrNull(idx)?.let { c ->
-                                    val ymd = SimpleDateFormat("yyyy-MM-dd", Locale.getDefault()).apply {
-                                        timeZone = TimeZone.getTimeZone("GMT+8")
-                                    }.format(Date(c.timestamp))
-                                    onViewIntradayForDate(ymd)
+        ) {
+            Canvas(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .pointerInput(candles) {
+                        detectTapGestures(
+                            onPress = { offset ->
+                                selectedIndex = calculateCandleIndex(offset.x, size.width.toFloat(), candles.size)
+                            },
+                            onTap = { offset ->
+                                selectedIndex = calculateCandleIndex(offset.x, size.width.toFloat(), candles.size)
+                            },
+                            onDoubleTap = { offset ->
+                                val idx = calculateCandleIndex(offset.x, size.width.toFloat(), candles.size)
+                                selectedIndex = idx
+                                if (chartType == ChartType.CANDLESTICK && onViewIntradayForDate != null) {
+                                    candles.getOrNull(idx)?.let { c ->
+                                        val ymd = SimpleDateFormat("yyyy-MM-dd", Locale.getDefault()).apply {
+                                            timeZone = TimeZone.getTimeZone("GMT+8")
+                                        }.format(Date(c.timestamp))
+                                        onViewIntradayForDate(ymd)
+                                    }
                                 }
                             }
-                        }
-                    )
+                        )
+                    }
+                    .pointerInput(candles) {
+                        detectDragGestures(
+                            onDragStart = { offset ->
+                                selectedIndex = calculateCandleIndex(offset.x, size.width.toFloat(), candles.size)
+                            },
+                            onDrag = { change, _ ->
+                                change.consume()
+                                selectedIndex = calculateCandleIndex(change.position.x, size.width.toFloat(), candles.size)
+                            },
+                            onDragEnd = {
+                                // keep selected
+                            }
+                        )
+                    }
+            ) {
+                val width = size.width
+                val height = size.height
+
+                val priceChartHeight = height * 0.70f
+                val volumeChartHeight = height * 0.22f
+                val volumeChartTop = height * 0.78f
+
+                val minPrice: Double
+                val maxPrice: Double
+                val priceSpan: Double
+                val adjustedMinPrice: Double
+
+                if (chartType == ChartType.LINE && previousClose != null && previousClose > 0) {
+                    // Fixed limit-up and limit-down coordinates (固定涨跌停坐标)
+                    val nominalDev = previousClose * limitRate
+                    val actualMaxDev = candles.maxOfOrNull { abs(it.close - previousClose) } ?: 0.0
+                    val effectiveDev = max(nominalDev, actualMaxDev)
+                    minPrice = previousClose - effectiveDev
+                    maxPrice = previousClose + effectiveDev
+                    priceSpan = maxPrice - minPrice
+                    adjustedMinPrice = minPrice
+                } else {
+                    val rawMin = candles.minOf { it.low }
+                    val rawMax = candles.maxOf { it.high }
+                    priceSpan = max(0.01, rawMax - rawMin) * 1.08
+                    adjustedMinPrice = rawMin - (priceSpan * 0.04)
+                    minPrice = adjustedMinPrice
+                    maxPrice = adjustedMinPrice + priceSpan
                 }
-                .pointerInput(candles) {
-                    detectDragGestures(
-                        onDragStart = { offset ->
-                            selectedIndex = calculateCandleIndex(offset.x, size.width.toFloat(), candles.size)
-                        },
-                        onDrag = { change, _ ->
-                            change.consume()
-                            selectedIndex = calculateCandleIndex(change.position.x, size.width.toFloat(), candles.size)
-                        },
-                        onDragEnd = {
-                            // keep selected
-                        }
-                    )
-                }
-        ) {
-            val width = size.width
-            val height = size.height
 
-            val priceChartHeight = height * 0.70f
-            val volumeChartHeight = height * 0.22f
-            val volumeChartTop = height * 0.78f
+                val maxVolume = max(1L, candles.maxOf { it.volume }).toFloat()
 
-            val minPrice: Double
-            val maxPrice: Double
-            val priceSpan: Double
-            val adjustedMinPrice: Double
-
-            if (chartType == ChartType.LINE && previousClose != null && previousClose > 0) {
-                // For Intraday Line, calculate symmetric bounds around previous close
-                val maxDev = candles.maxOfOrNull { abs(it.close - previousClose) } ?: (previousClose * 0.02)
-                val safeDev = max(maxDev, previousClose * 0.01) * 1.15
-                minPrice = previousClose - safeDev
-                maxPrice = previousClose + safeDev
-                priceSpan = maxPrice - minPrice
-                adjustedMinPrice = minPrice
-            } else {
-                val rawMin = candles.minOf { it.low }
-                val rawMax = candles.maxOf { it.high }
-                priceSpan = max(0.01, rawMax - rawMin) * 1.08
-                adjustedMinPrice = rawMin - (priceSpan * 0.04)
-                minPrice = adjustedMinPrice
-                maxPrice = adjustedMinPrice + priceSpan
-            }
-
-            val maxVolume = max(1L, candles.maxOf { it.volume }).toFloat()
-
-            // Draw Background Grid
-            drawEastMoneyGrid(
-                width = width,
-                priceHeight = priceChartHeight,
-                volTop = volumeChartTop,
-                volHeight = volumeChartHeight,
-                chartType = chartType,
-                hasPrevClose = chartType == ChartType.LINE && previousClose != null
-            )
+                // Draw Background Grid
+                drawEastMoneyGrid(
+                    width = width,
+                    priceHeight = priceChartHeight,
+                    volTop = volumeChartTop,
+                    volHeight = volumeChartHeight,
+                    chartType = chartType,
+                    hasPrevClose = chartType == ChartType.LINE && previousClose != null
+                )
 
             val candleCount = candles.size
             val candleWidth = width / candleCount
@@ -452,6 +469,70 @@ fun CandlestickChart(
                 }
             }
         }
+
+        // Fixed Limit Up / Limit Down Y-Axis overlay labels (East Money style)
+        if (chartType == ChartType.LINE && previousClose != null && previousClose > 0) {
+            val effectiveDev = max(previousClose * limitRate, candles.maxOfOrNull { abs(it.close - previousClose) } ?: 0.0)
+            val topPrice = previousClose + effectiveDev
+            val botPrice = previousClose - effectiveDev
+            val topPct = if (previousClose > 0) (topPrice - previousClose) / previousClose * 100 else 0.0
+            val botPct = if (previousClose > 0) (previousClose - botPrice) / previousClose * 100 else 0.0
+
+            // Intraday price area takes top 70% of 250dp = 175dp
+            val priceAreaHeight = 175.dp
+
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(priceAreaHeight)
+                    .padding(horizontal = 4.dp, vertical = 2.dp)
+            ) {
+                // Left labels: 涨停, 昨收, 跌停
+                Text(
+                    text = "涨停 ${String.format(Locale.US, "%.2f", topPrice)}",
+                    color = stockColors.upColor,
+                    fontSize = 9.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    modifier = Modifier.align(Alignment.TopStart)
+                )
+                Text(
+                    text = "昨收 ${String.format(Locale.US, "%.2f", previousClose)}",
+                    color = TextSecondary,
+                    fontSize = 9.sp,
+                    modifier = Modifier.align(Alignment.CenterStart)
+                )
+                Text(
+                    text = "跌停 ${String.format(Locale.US, "%.2f", botPrice)}",
+                    color = stockColors.downColor,
+                    fontSize = 9.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    modifier = Modifier.align(Alignment.BottomStart)
+                )
+
+                // Right labels: +XX.XX%, 0.00%, -XX.XX%
+                Text(
+                    text = "+${String.format(Locale.US, "%.2f%%", topPct)}",
+                    color = stockColors.upColor,
+                    fontSize = 9.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    modifier = Modifier.align(Alignment.TopEnd)
+                )
+                Text(
+                    text = "0.00%",
+                    color = TextSecondary,
+                    fontSize = 9.sp,
+                    modifier = Modifier.align(Alignment.CenterEnd)
+                )
+                Text(
+                    text = "-${String.format(Locale.US, "%.2f%%", botPct)}",
+                    color = stockColors.downColor,
+                    fontSize = 9.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    modifier = Modifier.align(Alignment.BottomEnd)
+                )
+            }
+        }
+    }
 
         // Sub-chart Vol Legend
         Row(
