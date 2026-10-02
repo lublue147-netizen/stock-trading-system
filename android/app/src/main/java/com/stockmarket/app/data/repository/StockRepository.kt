@@ -186,17 +186,440 @@ class StockRepository(
         }
     }
 
-    fun fetchDirectEastMoneySectorQuotes(sectorCodes: List<String>): List<StockQuote>? {
-        if (sectorCodes.isEmpty()) return emptyList()
-        val firstBk = sectorCodes.firstOrNull()?.trim()?.uppercase() ?: ""
+    // --- Official EastMoney Limit-Up / Yesterday Limit-Up / Multi-Board Pools ---
 
-        // 1. Instant check for cached sector detail quote
-        val cached = sectorDetailCache[firstBk]?.second?.quote
-        if (cached != null && System.currentTimeMillis() - (sectorDetailCache[firstBk]?.first ?: 0L) < 30_000) {
-            return listOf(cached)
+    private fun getEastMoneyPoolDateStr(offsetDays: Int = 0): String {
+        val sdf = SimpleDateFormat("yyyyMMdd", Locale.getDefault()).apply {
+            timeZone = TimeZone.getTimeZone("GMT+8")
+        }
+        val targetMs = System.currentTimeMillis() - (offsetDays * 86_400_000L)
+        return sdf.format(Date(targetMs))
+    }
+
+    fun fetchDirectEastMoneyYesterdayZTPool(page: Int = 1, pageSize: Int = 80): List<ThematicStockItem> {
+        val pi = maxOf(0, page - 1)
+        for (offset in 0..2) {
+            val dateStr = getEastMoneyPoolDateStr(offset)
+            val url = "https://push2ex.eastmoney.com/getYesterdayZTPool?ut=7eea3edcaed734bea9cbfc24409ed989&dpt=wz.ztzt&Pageindex=$pi&pagesize=$pageSize&sort=zdp:desc&date=$dateStr"
+            try {
+                val request = Request.Builder()
+                    .url(url)
+                    .header("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64)")
+                    .header("Referer", "https://quote.eastmoney.com/")
+                    .build()
+
+                val response = ApiClient.ultraFastOkHttpClient.newCall(request).execute()
+                if (!response.isSuccessful) {
+                    response.close()
+                    continue
+                }
+                val bodyStr = response.body?.string()?.trim() ?: continue
+                val rootObj = try { JSONObject(bodyStr) } catch (_: Exception) { continue }
+                val dataObj = rootObj.optJSONObject("data") ?: continue
+                val poolArr = dataObj.optJSONArray("pool") ?: continue
+                if (poolArr.length() == 0) continue
+
+                val items = mutableListOf<ThematicStockItem>()
+                for (i in 0 until poolArr.length()) {
+                    val obj = poolArr.optJSONObject(i) ?: continue
+                    val code = obj.optString("c", "").trim()
+                    val m = obj.optInt("m", 0)
+                    val name = obj.optString("n", "").replace(Regex("\\s+"), " ").trim()
+                    if (code.isEmpty() || name.isEmpty()) continue
+
+                    val rawPrice = obj.optDouble("p", 0.0)
+                    val price = round((rawPrice / 1000.0) * 100.0) / 100.0
+                    val zdp = obj.optDouble("zdp", 0.0)
+                    val changePercent = round(zdp * 100.0) / 100.0
+                    val prevClose = if (changePercent != -100.0) price / (1.0 + changePercent / 100.0) else price
+                    val change = round((price - prevClose) * 100.0) / 100.0
+                    val amount = obj.optDouble("amount", 0.0)
+                    val turnoverRate = obj.optDouble("hs", 0.0)
+                    val ylbc = obj.optInt("ylbc", 1)
+                    val zttjObj = obj.optJSONObject("zttj")
+                    val days = zttjObj?.optInt("days", 0) ?: 0
+                    val ct = zttjObj?.optInt("ct", 0) ?: 0
+                    val hybk = obj.optString("hybk", "").trim()
+
+                    val fullSymbol = when {
+                        m == 1 || code.startsWith("6") || code.startsWith("9") -> "$code.SS"
+                        m == 2 || code.startsWith("8") || code.startsWith("4") || code.startsWith("920") -> "$code.BJ"
+                        else -> "$code.SZ"
+                    }
+
+                    val (indName, indBk) = if (hybk.isNotEmpty()) {
+                        val bk = StockIndustryRegistry.findBkCodeForIndustry(hybk)
+                        StockIndustryRegistry.cacheIndustry(code, hybk, bk)
+                        Pair(hybk, bk)
+                    } else {
+                        StockIndustryRegistry.resolveStockIndustryLocally(fullSymbol)
+                    }
+
+                    val isSuspended = price <= 0.0
+                    val tag = when {
+                        isSuspended -> "停牌"
+                        ylbc > 1 -> "${ylbc}连板接力"
+                        changePercent >= 19.8 -> "20cm涨停"
+                        changePercent >= 9.8 -> "涨停晋级"
+                        changePercent >= 5.0 -> "高溢价"
+                        changePercent >= 0.0 -> "红盘溢价"
+                        else -> "昨日涨停"
+                    }
+
+                    val subDetail = when {
+                        ct > 1 && days > 0 -> "$indName·${days}天${ct}板"
+                        ylbc > 1 -> "$indName·昨日${ylbc}连板"
+                        indName.isNotEmpty() -> "$indName·昨日涨停"
+                        else -> "昨日涨停精选"
+                    }
+
+                    items.add(
+                        ThematicStockItem(
+                            symbol = fullSymbol,
+                            name = name,
+                            price = price,
+                            change = change,
+                            changePercent = changePercent,
+                            boardCount = if (ylbc > 0) ylbc else if (ct > 0) ct else 1,
+                            tag = tag,
+                            subDetail = subDetail,
+                            industry = indName,
+                            industryBkCode = indBk,
+                            industryChangePercent = null,
+                            turnoverAmount = amount,
+                            turnoverRate = turnoverRate
+                        )
+                    )
+                }
+
+                if (items.isNotEmpty()) {
+                    android.util.Log.d("EastMoneyPool", "fetchDirectEastMoneyYesterdayZTPool date=$dateStr SUCCESS: ${items.size} items")
+                    return items
+                }
+            } catch (e: Exception) {
+                android.util.Log.w("EastMoneyPool", "fetchDirectEastMoneyYesterdayZTPool failed for $dateStr: ${e.message}")
+            }
+        }
+        return emptyList()
+    }
+
+    fun fetchDirectEastMoneyTopicZTPool(page: Int = 1, pageSize: Int = 80): List<ThematicStockItem> {
+        val pi = maxOf(0, page - 1)
+        for (offset in 0..2) {
+            val dateStr = getEastMoneyPoolDateStr(offset)
+            val url = "https://push2ex.eastmoney.com/getTopicZTPool?ut=7eea3edcaed734bea9cbfc24409ed989&dpt=wz.ztzt&Pageindex=$pi&pagesize=$pageSize&sort=lbc:desc&date=$dateStr"
+            try {
+                val request = Request.Builder()
+                    .url(url)
+                    .header("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64)")
+                    .header("Referer", "https://quote.eastmoney.com/")
+                    .build()
+
+                val response = ApiClient.ultraFastOkHttpClient.newCall(request).execute()
+                if (!response.isSuccessful) {
+                    response.close()
+                    continue
+                }
+                val bodyStr = response.body?.string()?.trim() ?: continue
+                val rootObj = try { JSONObject(bodyStr) } catch (_: Exception) { continue }
+                val dataObj = rootObj.optJSONObject("data") ?: continue
+                val poolArr = dataObj.optJSONArray("pool") ?: continue
+                if (poolArr.length() == 0) continue
+
+                val items = mutableListOf<ThematicStockItem>()
+                for (i in 0 until poolArr.length()) {
+                    val obj = poolArr.optJSONObject(i) ?: continue
+                    val code = obj.optString("c", "").trim()
+                    val m = obj.optInt("m", 0)
+                    val name = obj.optString("n", "").replace(Regex("\\s+"), " ").trim()
+                    if (code.isEmpty() || name.isEmpty()) continue
+
+                    val rawPrice = obj.optDouble("p", 0.0)
+                    val price = round((rawPrice / 1000.0) * 100.0) / 100.0
+                    val zdp = obj.optDouble("zdp", 0.0)
+                    val changePercent = round(zdp * 100.0) / 100.0
+                    val prevClose = if (changePercent != -100.0) price / (1.0 + changePercent / 100.0) else price
+                    val change = round((price - prevClose) * 100.0) / 100.0
+                    val amount = obj.optDouble("amount", 0.0)
+                    val turnoverRate = obj.optDouble("hs", 0.0)
+                    val lbc = obj.optInt("lbc", 1)
+                    val zttjObj = obj.optJSONObject("zttj")
+                    val days = zttjObj?.optInt("days", 0) ?: 0
+                    val ct = zttjObj?.optInt("ct", 0) ?: 0
+                    val hybk = obj.optString("hybk", "").trim()
+
+                    val fullSymbol = when {
+                        m == 1 || code.startsWith("6") || code.startsWith("9") -> "$code.SS"
+                        m == 2 || code.startsWith("8") || code.startsWith("4") || code.startsWith("920") -> "$code.BJ"
+                        else -> "$code.SZ"
+                    }
+
+                    val (indName, indBk) = if (hybk.isNotEmpty()) {
+                        val bk = StockIndustryRegistry.findBkCodeForIndustry(hybk)
+                        StockIndustryRegistry.cacheIndustry(code, hybk, bk)
+                        Pair(hybk, bk)
+                    } else {
+                        StockIndustryRegistry.resolveStockIndustryLocally(fullSymbol)
+                    }
+
+                    val isSuspended = price <= 0.0
+                    val tag = when {
+                        isSuspended -> "停牌"
+                        lbc > 1 -> "${lbc}连板"
+                        ct > 1 && days > 0 -> "${days}天${ct}板"
+                        changePercent >= 19.8 -> "20cm涨停"
+                        changePercent >= 9.8 -> "首板涨停"
+                        else -> "梯队龙头"
+                    }
+
+                    val subDetail = when {
+                        lbc > 1 -> "$indName·${lbc}连板天梯"
+                        ct > 1 && days > 0 -> "$indName·${days}天${ct}板"
+                        indName.isNotEmpty() -> "$indName·涨停龙头"
+                        else -> "连板梯队"
+                    }
+
+                    items.add(
+                        ThematicStockItem(
+                            symbol = fullSymbol,
+                            name = name,
+                            price = price,
+                            change = change,
+                            changePercent = changePercent,
+                            boardCount = if (lbc > 0) lbc else if (ct > 0) ct else 1,
+                            tag = tag,
+                            subDetail = subDetail,
+                            industry = indName,
+                            industryBkCode = indBk,
+                            industryChangePercent = null,
+                            turnoverAmount = amount,
+                            turnoverRate = turnoverRate
+                        )
+                    )
+                }
+
+                if (items.isNotEmpty()) {
+                    android.util.Log.d("EastMoneyPool", "fetchDirectEastMoneyTopicZTPool date=$dateStr SUCCESS: ${items.size} items")
+                    return items
+                }
+            } catch (e: Exception) {
+                android.util.Log.w("EastMoneyPool", "fetchDirectEastMoneyTopicZTPool failed for $dateStr: ${e.message}")
+            }
+        }
+        return emptyList()
+    }
+
+    fun fetchDirectEastMoneyTopicQSPool(page: Int = 1, pageSize: Int = 80): List<ThematicStockItem> {
+        val pi = maxOf(0, page - 1)
+        for (offset in 0..2) {
+            val dateStr = getEastMoneyPoolDateStr(offset)
+            val url = "https://push2ex.eastmoney.com/getTopicQSPool?ut=7eea3edcaed734bea9cbfc24409ed989&dpt=wz.ztzt&Pageindex=$pi&pagesize=$pageSize&sort=zdp:desc&date=$dateStr"
+            try {
+                val request = Request.Builder()
+                    .url(url)
+                    .header("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64)")
+                    .header("Referer", "https://quote.eastmoney.com/")
+                    .build()
+
+                val response = ApiClient.ultraFastOkHttpClient.newCall(request).execute()
+                if (!response.isSuccessful) {
+                    response.close()
+                    continue
+                }
+                val bodyStr = response.body?.string()?.trim() ?: continue
+                val rootObj = try { JSONObject(bodyStr) } catch (_: Exception) { continue }
+                val dataObj = rootObj.optJSONObject("data") ?: continue
+                val poolArr = dataObj.optJSONArray("pool") ?: continue
+                if (poolArr.length() == 0) continue
+
+                val items = mutableListOf<ThematicStockItem>()
+                for (i in 0 until poolArr.length()) {
+                    val obj = poolArr.optJSONObject(i) ?: continue
+                    val code = obj.optString("c", "").trim()
+                    val m = obj.optInt("m", 0)
+                    val name = obj.optString("n", "").replace(Regex("\\s+"), " ").trim()
+                    if (code.isEmpty() || name.isEmpty()) continue
+
+                    val rawPrice = obj.optDouble("p", 0.0)
+                    val price = round((rawPrice / 1000.0) * 100.0) / 100.0
+                    val zdp = obj.optDouble("zdp", 0.0)
+                    val changePercent = round(zdp * 100.0) / 100.0
+                    val prevClose = if (changePercent != -100.0) price / (1.0 + changePercent / 100.0) else price
+                    val change = round((price - prevClose) * 100.0) / 100.0
+                    val amount = obj.optDouble("amount", 0.0)
+                    val turnoverRate = obj.optDouble("hs", 0.0)
+                    val zttjObj = obj.optJSONObject("zttj")
+                    val days = zttjObj?.optInt("days", 0) ?: 0
+                    val ct = zttjObj?.optInt("ct", 0) ?: 0
+                    val hybk = obj.optString("hybk", "").trim()
+
+                    val fullSymbol = when {
+                        m == 1 || code.startsWith("6") || code.startsWith("9") -> "$code.SS"
+                        m == 2 || code.startsWith("8") || code.startsWith("4") || code.startsWith("920") -> "$code.BJ"
+                        else -> "$code.SZ"
+                    }
+
+                    val (indName, indBk) = if (hybk.isNotEmpty()) {
+                        val bk = StockIndustryRegistry.findBkCodeForIndustry(hybk)
+                        StockIndustryRegistry.cacheIndustry(code, hybk, bk)
+                        Pair(hybk, bk)
+                    } else {
+                        StockIndustryRegistry.resolveStockIndustryLocally(fullSymbol)
+                    }
+
+                    val isSuspended = price <= 0.0
+                    val tag = when {
+                        isSuspended -> "停牌"
+                        ct > 1 && days > 0 -> "${days}天${ct}板"
+                        changePercent >= 19.8 -> "20cm涨停"
+                        changePercent >= 9.8 -> "涨停领跑"
+                        changePercent >= 5.0 -> "强势主升"
+                        changePercent >= 0.0 -> "红盘趋势"
+                        else -> "强势蓄势"
+                    }
+
+                    val subDetail = when {
+                        ct > 1 && days > 0 -> "$indName·${days}天${ct}板"
+                        indName.isNotEmpty() -> "$indName·强势龙头"
+                        else -> "强势精选"
+                    }
+
+                    items.add(
+                        ThematicStockItem(
+                            symbol = fullSymbol,
+                            name = name,
+                            price = price,
+                            change = change,
+                            changePercent = changePercent,
+                            boardCount = if (ct > 0) ct else if (changePercent >= 9.8) 1 else null,
+                            tag = tag,
+                            subDetail = subDetail,
+                            industry = indName,
+                            industryBkCode = indBk,
+                            industryChangePercent = null,
+                            turnoverAmount = amount,
+                            turnoverRate = turnoverRate
+                        )
+                    )
+                }
+
+                if (items.isNotEmpty()) {
+                    android.util.Log.d("EastMoneyPool", "fetchDirectEastMoneyTopicQSPool date=$dateStr SUCCESS: ${items.size} items")
+                    return items
+                }
+            } catch (e: Exception) {
+                android.util.Log.w("EastMoneyPool", "fetchDirectEastMoneyTopicQSPool failed for $dateStr: ${e.message}")
+            }
+        }
+        return emptyList()
+    }
+
+    fun fetchDirectEastMoneyMultiBoardPool(page: Int = 1, pageSize: Int = 80): List<ThematicStockItem> {
+        val ztItems = fetchDirectEastMoneyTopicZTPool(page = 1, pageSize = 200)
+        val qsItems = fetchDirectEastMoneyTopicQSPool(page = 1, pageSize = 200)
+
+        val combinedMap = LinkedHashMap<String, ThematicStockItem>()
+        for (item in ztItems) {
+            combinedMap[item.symbol] = item
+        }
+        for (item in qsItems) {
+            if (!combinedMap.containsKey(item.symbol)) {
+                combinedMap[item.symbol] = item
+            }
         }
 
-        val secids = sectorCodes.joinToString(",") {
+        if (combinedMap.isNotEmpty()) {
+            val sorted = combinedMap.values.sortedWith(
+                compareByDescending<ThematicStockItem> { it.boardCount ?: 0 }
+                    .thenByDescending { it.changePercent }
+            )
+            val pageNum = maxOf(1, page)
+            val pSize = maxOf(1, pageSize)
+            val start = (pageNum - 1) * pSize
+            return if (start < sorted.size) sorted.subList(start, minOf(start + pSize, sorted.size)) else emptyList()
+        }
+
+        return fetchDirectSinaMarketCenterGainers(page = page, pageSize = pageSize)
+    }
+
+    fun fetchDirectEastMoneySectorQuotes(sectorCodes: List<String>): List<StockQuote>? {
+        if (sectorCodes.isEmpty()) return emptyList()
+
+        val results = mutableListOf<StockQuote>()
+        val remainingCodes = mutableListOf<String>()
+
+        for (sec in sectorCodes) {
+            val clean = sec.trim().uppercase()
+            val cached = sectorDetailCache[clean]?.second?.quote
+            if (cached != null && System.currentTimeMillis() - (sectorDetailCache[clean]?.first ?: 0L) < 30_000) {
+                results.add(cached)
+                continue
+            }
+            if (clean in listOf("BK1050", "BK0815", "1050", "0815")) {
+                val pool = fetchDirectEastMoneyYesterdayZTPool(page = 1, pageSize = 80)
+                if (pool.isNotEmpty()) {
+                    val avgChg = round(pool.map { it.changePercent }.average() * 100) / 100.0
+                    val sumTurnover = pool.sumOf { it.turnoverAmount }
+                    val nonZeroTr = pool.filter { it.turnoverRate > 0.0 }
+                    val avgTr = if (nonZeroTr.isNotEmpty()) round(nonZeroTr.map { it.turnoverRate }.average() * 100) / 100.0 else 0.0
+                    val q = StockQuote(
+                        symbol = clean,
+                        name = if (clean.contains("0815")) "昨日涨停" else "昨日涨停-含一字",
+                        price = round(1000.0 * (1.0 + avgChg / 100.0) * 100) / 100.0,
+                        change = round(1000.0 * (avgChg / 100.0) * 100) / 100.0,
+                        changePercent = avgChg,
+                        currency = "点",
+                        exchange = "板块",
+                        open = 1000.0,
+                        high = round(1000.0 * (1.0 + maxOf(avgChg, 0.0) / 100.0) * 100) / 100.0,
+                        low = round(1000.0 * (1.0 + minOf(avgChg, 0.0) / 100.0) * 100) / 100.0,
+                        previousClose = 1000.0,
+                        turnoverAmount = sumTurnover,
+                        turnoverRate = avgTr
+                    )
+                    results.add(q)
+                    continue
+                }
+            } else if (clean in listOf("BK1638", "BK0816", "1638", "0816")) {
+                val pool = fetchDirectEastMoneyMultiBoardPool(page = 1, pageSize = 80)
+                if (pool.isNotEmpty()) {
+                    val avgChg = round(pool.map { it.changePercent }.average() * 100) / 100.0
+                    val sumTurnover = pool.sumOf { it.turnoverAmount }
+                    val nonZeroTr = pool.filter { it.turnoverRate > 0.0 }
+                    val avgTr = if (nonZeroTr.isNotEmpty()) round(nonZeroTr.map { it.turnoverRate }.average() * 100) / 100.0 else 0.0
+                    val q = StockQuote(
+                        symbol = clean,
+                        name = if (clean.contains("0816")) "强势股" else "最近多板",
+                        price = round(1000.0 * (1.0 + avgChg / 100.0) * 100) / 100.0,
+                        change = round(1000.0 * (avgChg / 100.0) * 100) / 100.0,
+                        changePercent = avgChg,
+                        currency = "点",
+                        exchange = "板块",
+                        open = 1000.0,
+                        high = round(1000.0 * (1.0 + maxOf(avgChg, 0.0) / 100.0) * 100) / 100.0,
+                        low = round(1000.0 * (1.0 + minOf(avgChg, 0.0) / 100.0) * 100) / 100.0,
+                        previousClose = 1000.0,
+                        turnoverAmount = sumTurnover,
+                        turnoverRate = avgTr
+                    )
+                    results.add(q)
+                    continue
+                }
+            }
+            remainingCodes.add(clean)
+        }
+
+        if (remainingCodes.isEmpty()) {
+            return results
+        }
+
+        val firstBk = remainingCodes.firstOrNull() ?: ""
+        val cachedFirst = sectorDetailCache[firstBk]?.second?.quote
+        if (cachedFirst != null && System.currentTimeMillis() - (sectorDetailCache[firstBk]?.first ?: 0L) < 30_000) {
+            return results + listOf(cachedFirst)
+        }
+
+        val secids = remainingCodes.joinToString(",") {
             val clean = it.trim().uppercase()
             if (clean.startsWith("BK")) "90.$clean" else "90.BK$clean"
         }
@@ -259,7 +682,7 @@ class StockRepository(
                         )
                     }
                 }
-                if (list.isNotEmpty()) return list
+                if (list.isNotEmpty()) return results + list
             } catch (_: Exception) {
                 // continue to next url
             }
@@ -267,7 +690,7 @@ class StockRepository(
 
         // Resilient fallback: synthesize sector quote from constituent stocks
         val synthesizedList = mutableListOf<StockQuote>()
-        for (secCode in sectorCodes) {
+        for (secCode in remainingCodes) {
             val clean = secCode.trim().uppercase()
             val symbols = StockIndustryRegistry.getSectorStockSymbols(clean)
             if (symbols.isNotEmpty()) {
@@ -302,9 +725,9 @@ class StockRepository(
                 } catch (_: Exception) {}
             }
         }
-        if (synthesizedList.isNotEmpty()) return synthesizedList
+        if (synthesizedList.isNotEmpty()) return results + synthesizedList
 
-        return null
+        return if (results.isNotEmpty()) results else null
     }
 
     suspend fun getWatchlistQuotes(customSymbols: List<String>? = null): Result<List<StockQuote>> = withContext(Dispatchers.IO) {
@@ -538,15 +961,95 @@ class StockRepository(
             return@withContext Result.success(it)
         }
 
-        // Special native client-side fast-path for BK1638 (连板天梯 / 涨停股): 100% domestic Sina VIP pipeline
-        if (clean == "BK1638" || clean == "1638") {
-            val liveGainers = fetchDirectSinaMarketCenterGainers(page = 1, pageSize = 80)
+        // Special native client-side fast-path for BK1050 / BK0815 (昨日涨停): Official EastMoney push2ex yesterday limit-up pool
+        if (clean in listOf("BK1050", "BK0815", "1050", "0815")) {
+            val poolItems = fetchDirectEastMoneyYesterdayZTPool(page = 1, pageSize = 200)
+            val fallbackSymbols = StockIndustryRegistry.getSectorStockSymbols("BK1050")
+            val fallbackQuotes = try { fetchDirectTencentQuotes(fallbackSymbols) } catch (_: Exception) { null } ?: emptyList()
+
+            val combinedMap = LinkedHashMap<String, ThematicStockItem>()
+            for (item in poolItems) {
+                combinedMap[item.symbol] = item
+            }
+            for (q in fallbackQuotes) {
+                if (!combinedMap.containsKey(q.symbol)) {
+                    val (indName, indBk) = StockIndustryRegistry.resolveStockIndustryLocally(q.symbol)
+                    val isSuspended = (q.price <= 0.0) && (q.previousClose > 0.0)
+                    val tag = when {
+                        isSuspended -> "停牌"
+                        q.changePercent >= 19.8 -> "20cm涨停"
+                        q.changePercent >= 9.8 -> "涨停晋级"
+                        q.changePercent >= 5.0 -> "高溢价"
+                        q.changePercent >= 0.0 -> "红盘溢价"
+                        else -> "昨日涨停"
+                    }
+                    combinedMap[q.symbol] = ThematicStockItem(
+                        symbol = q.symbol,
+                        name = q.name,
+                        price = q.price,
+                        change = q.change,
+                        changePercent = q.changePercent,
+                        boardCount = if (q.changePercent >= 9.8) 1 else null,
+                        tag = tag,
+                        subDetail = if (indName.isNotEmpty()) "$indName·昨日涨停" else "昨日涨停精选",
+                        industry = indName,
+                        industryBkCode = indBk,
+                        industryChangePercent = null,
+                        turnoverAmount = q.turnoverAmount,
+                        turnoverRate = q.turnoverRate
+                    )
+                }
+            }
+
+            val sortedItems = combinedMap.values.sortedByDescending { it.changePercent }
+            val avgChg = if (sortedItems.isNotEmpty()) round(sortedItems.map { it.changePercent }.average() * 100) / 100.0 else 0.0
+            val sumTurnover = sortedItems.sumOf { it.turnoverAmount }
+            val avgTurnoverRate = if (sortedItems.isNotEmpty()) {
+                val nonZero = sortedItems.filter { it.turnoverRate > 0.0 }
+                if (nonZero.isNotEmpty()) round(nonZero.map { it.turnoverRate }.average() * 100) / 100.0 else 0.0
+            } else 0.0
+            val leader = sortedItems.firstOrNull()
+
+            val sectorName = if (clean.contains("0815")) "昨日涨停" else "昨日涨停-含一字"
+            val quote = StockQuote(
+                symbol = clean,
+                name = sectorName,
+                price = round(1000.0 * (1.0 + avgChg / 100.0) * 100) / 100.0,
+                change = round(1000.0 * (avgChg / 100.0) * 100) / 100.0,
+                changePercent = avgChg,
+                currency = "点",
+                exchange = "板块",
+                open = 1000.0,
+                high = round(1000.0 * (1.0 + (leader?.changePercent ?: avgChg) / 100.0) * 100) / 100.0,
+                low = 1000.0,
+                previousClose = 1000.0,
+                volume = (sumTurnover / 20.0).toLong(),
+                turnoverAmount = sumTurnover,
+                turnoverRate = avgTurnoverRate
+            )
+
+            val result = SectorDetailResult(
+                quote = quote,
+                constituents = sortedItems,
+                totalCount = sortedItems.size,
+                diagnosticInfo = "东方财富官方昨日涨停池 (${sortedItems.size}只)"
+            )
+            sectorDetailCache[clean] = Pair(System.currentTimeMillis(), result)
+            for (item in sortedItems) {
+                cacheStockFromConstituent(item)
+            }
+            return@withContext Result.success(result)
+        }
+
+        // Special native client-side fast-path for BK1638 / BK0816 (最近多板 / 连板天梯): Official EastMoney push2ex topic pool
+        if (clean in listOf("BK1638", "BK0816", "1638", "0816")) {
+            val poolItems = fetchDirectEastMoneyMultiBoardPool(page = 1, pageSize = 200)
             val fallbackSymbols = StockIndustryRegistry.getSectorStockSymbols("BK1638")
             val fallbackQuotes = try { fetchDirectTencentQuotes(fallbackSymbols) } catch (_: Exception) { null } ?: emptyList()
 
             val combinedMap = LinkedHashMap<String, ThematicStockItem>()
-            for (g in liveGainers) {
-                combinedMap[g.symbol] = g
+            for (item in poolItems) {
+                combinedMap[item.symbol] = item
             }
             for (q in fallbackQuotes) {
                 if (!combinedMap.containsKey(q.symbol)) {
@@ -578,7 +1081,10 @@ class StockRepository(
                 }
             }
 
-            val sortedItems = combinedMap.values.sortedByDescending { it.changePercent }
+            val sortedItems = combinedMap.values.sortedWith(
+                compareByDescending<ThematicStockItem> { it.boardCount ?: 0 }
+                    .thenByDescending { it.changePercent }
+            )
             val avgChg = if (sortedItems.isNotEmpty()) round(sortedItems.map { it.changePercent }.average() * 100) / 100.0 else 0.0
             val sumTurnover = sortedItems.sumOf { it.turnoverAmount }
             val avgTurnoverRate = if (sortedItems.isNotEmpty()) {
@@ -587,9 +1093,10 @@ class StockRepository(
             } else 0.0
             val leader = sortedItems.firstOrNull()
 
+            val sectorName = if (clean.contains("0816")) "强势股" else "最近多板"
             val quote = StockQuote(
-                symbol = "BK1638",
-                name = "最近多板",
+                symbol = clean,
+                name = sectorName,
                 price = round(1000.0 * (1.0 + avgChg / 100.0) * 100) / 100.0,
                 change = round(1000.0 * (avgChg / 100.0) * 100) / 100.0,
                 changePercent = avgChg,
@@ -608,9 +1115,12 @@ class StockRepository(
                 quote = quote,
                 constituents = sortedItems,
                 totalCount = sortedItems.size,
-                diagnosticInfo = "新浪VIP实时行情直连 (${sortedItems.size}只)"
+                diagnosticInfo = "东方财富官方连板天梯池 (${sortedItems.size}只)"
             )
-            sectorDetailCache["BK1638"] = Pair(System.currentTimeMillis(), result)
+            sectorDetailCache[clean] = Pair(System.currentTimeMillis(), result)
+            for (item in sortedItems) {
+                cacheStockFromConstituent(item)
+            }
             return@withContext Result.success(result)
         }
 
@@ -917,56 +1427,56 @@ class StockRepository(
 
     private val THEMATIC_STOCK_DEFS = listOf(
         // 最近多板 (连板天梯 / 连板高度龙头)
-        SectorStockDef("000536.SZ", "华映科技", ThematicSectorType.MULTI_BOARD, 5, "5连板", "华为产业链+车载触控"),
-        SectorStockDef("002583.SZ", "海能达", ThematicSectorType.MULTI_BOARD, 4, "4连板", "专网通信+中东主权订单"),
-        SectorStockDef("603268.SS", "松发股份", ThematicSectorType.MULTI_BOARD, 4, "4连板", "重大资产置换+恒力重工"),
-        SectorStockDef("603106.SS", "恒银科技", ThematicSectorType.MULTI_BOARD, 3, "3连板", "AI金融设备+自主可控"),
-        SectorStockDef("002094.SZ", "青岛金王", ThematicSectorType.MULTI_BOARD, 3, "3连板", "跨境支付+新零售概念"),
-        SectorStockDef("600292.SS", "远达环保", ThematicSectorType.MULTI_BOARD, 3, "3连板", "国家电投水电资产注入"),
-        SectorStockDef("000958.SZ", "电投产融", ThematicSectorType.MULTI_BOARD, 3, "3连板", "央企重组+能源金融"),
-        SectorStockDef("603656.SS", "泰禾智能", ThematicSectorType.MULTI_BOARD, 2, "2连板", "阳光电源实控人入主"),
-        SectorStockDef("001696.SZ", "宗申动力", ThematicSectorType.MULTI_BOARD, 2, "2连板", "低空经济航空发动机龙头"),
-        SectorStockDef("000062.SZ", "深圳华强", ThematicSectorType.MULTI_BOARD, 2, "人气龙头", "海思全系列分销旗舰"),
-        SectorStockDef("600611.SS", "大众交通", ThematicSectorType.MULTI_BOARD, 2, "网约智驾", "Robotaxi智能网联运营"),
-        SectorStockDef("300085.SZ", "银之杰", ThematicSectorType.MULTI_BOARD, 2, "互金龙头", "金融科技+征信大数据"),
-        SectorStockDef("000158.SZ", "常山北明", ThematicSectorType.MULTI_BOARD, 2, "鸿蒙领航", "华为鸿蒙软件核心旗舰"),
-        SectorStockDef("300339.SZ", "润和软件", ThematicSectorType.MULTI_BOARD, 2, "开源鸿蒙", "全场景生态共建旗舰"),
-        SectorStockDef("002261.SZ", "拓维信息", ThematicSectorType.MULTI_BOARD, 2, "昇腾算力", "一体化AI软硬件方案"),
-        SectorStockDef("002456.SZ", "欧菲光", ThematicSectorType.MULTI_BOARD, 2, "潜望模组", "智能手机光学感知部件"),
-        SectorStockDef("600839.SS", "四川长虹", ThematicSectorType.MULTI_BOARD, 2, "自主可控", "华为天宫服务器制造中军"),
-        SectorStockDef("601727.SS", "上海电气", ThematicSectorType.MULTI_BOARD, 2, "高端重器", "低空通航+重型燃机核心"),
-        SectorStockDef("002085.SZ", "万丰奥威", ThematicSectorType.MULTI_BOARD, 2, "eVTOL领跑", "轻量化镁铝合金+通航整机"),
-        SectorStockDef("000099.SZ", "中信海直", ThematicSectorType.MULTI_BOARD, 2, "低空运营", "直升机海上运营首选龙头"),
-        SectorStockDef("301628.SZ", "强达电路", ThematicSectorType.MULTI_BOARD, 2, "高多层PCB", "高频高速刚挠结合板领军"),
-        SectorStockDef("688656.SS", "浩欧博", ThematicSectorType.MULTI_BOARD, 2, "生化诊断", "体外过敏原与自身抗体检测"),
-        SectorStockDef("603038.SS", "华立股份", ThematicSectorType.MULTI_BOARD, 2, "跨界算力", "大数据与饰边建材结合"),
-        SectorStockDef("002272.SZ", "川润股份", ThematicSectorType.MULTI_BOARD, 2, "浸没液冷", "特种流体冷却与风电润滑"),
+        SectorStockDef("600825.SS", "新华传媒", ThematicSectorType.MULTI_BOARD, 7, "7连板", "出版传媒+文化资产重组"),
+        SectorStockDef("000678.SZ", "襄阳轴承", ThematicSectorType.MULTI_BOARD, 4, "4连板", "汽车零部件+减速器轴承龙头"),
+        SectorStockDef("000011.SZ", "深物业A", ThematicSectorType.MULTI_BOARD, 3, "3连板", "深圳国资+房地产综合开发"),
+        SectorStockDef("002242.SZ", "九阳股份", ThematicSectorType.MULTI_BOARD, 3, "3连板", "品质小家电+智能家居出海"),
+        SectorStockDef("301190.SZ", "善水科技", ThematicSectorType.MULTI_BOARD, 3, "20cm3连板", "精细化工染料中间体龙头"),
+        SectorStockDef("600241.SS", "时代万恒", ThematicSectorType.MULTI_BOARD, 3, "3连板", "高能锂电池+新能源储能"),
+        SectorStockDef("002058.SZ", "紫竹高科", ThematicSectorType.MULTI_BOARD, 2, "2连板", "固态电池核心材料+电极材料"),
+        SectorStockDef("002866.SZ", "传艺科技", ThematicSectorType.MULTI_BOARD, 2, "2连板", "钠离子电池量产+消费电子模组"),
+        SectorStockDef("603188.SS", "亚邦股份", ThematicSectorType.MULTI_BOARD, 2, "2连板", "蒽醌染料龙头+高端精细化学"),
+        SectorStockDef("603200.SS", "上海洗霸", ThematicSectorType.MULTI_BOARD, 2, "2连板", "固态电池氧化物电解质突破"),
+        SectorStockDef("605303.SS", "园林股份", ThematicSectorType.MULTI_BOARD, 2, "2连板", "生态园林建设+政府化债推进"),
+        SectorStockDef("605388.SS", "均瑶健康", ThematicSectorType.MULTI_BOARD, 2, "2连板", "常温乳酸菌领跑+大健康消费"),
+        SectorStockDef("000504.SZ", "南华生物", ThematicSectorType.MULTI_BOARD, 1, "梯队龙头", "细胞组织冻存+生物干细胞研发"),
+        SectorStockDef("000692.SZ", "惠天热电", ThematicSectorType.MULTI_BOARD, 1, "公用事业", "热电联产清洁供暖核心保供"),
+        SectorStockDef("000710.SZ", "贝瑞基因", ThematicSectorType.MULTI_BOARD, 1, "基因测序", "高通量基因测序与AI医疗诊断"),
+        SectorStockDef("688185.SS", "康希诺", ThematicSectorType.MULTI_BOARD, 1, "20cm首板", "创新型疫苗研发全球化布局"),
+        SectorStockDef("000536.SZ", "华映科技", ThematicSectorType.MULTI_BOARD, 1, "车载触控", "华为车载视窗触控模组"),
+        SectorStockDef("002583.SZ", "海能达", ThematicSectorType.MULTI_BOARD, 1, "专网通信", "应急通信系统出海加速"),
+        SectorStockDef("603268.SS", "松发股份", ThematicSectorType.MULTI_BOARD, 1, "重大重组", "恒力重工造船资产借壳"),
+        SectorStockDef("603106.SS", "恒银科技", ThematicSectorType.MULTI_BOARD, 1, "AI金融", "金融级自主安全设备龙头"),
+        SectorStockDef("002094.SZ", "青岛金王", ThematicSectorType.MULTI_BOARD, 1, "跨境支付", "新零售与跨境清结算生态"),
+        SectorStockDef("600292.SS", "远达环保", ThematicSectorType.MULTI_BOARD, 1, "央企重组", "国家电投清洁能源注入"),
+        SectorStockDef("000958.SZ", "电投产融", ThematicSectorType.MULTI_BOARD, 1, "能源金融", "产业基金与电力重组示范"),
+        SectorStockDef("603656.SS", "泰禾智能", ThematicSectorType.MULTI_BOARD, 1, "阳光电源", "阳光电源实控人战略入主"),
 
         // 昨日涨停-含一字 (超短接力溢价表现)
-        SectorStockDef("300085.SZ", "银之杰", ThematicSectorType.YESTERDAY_LIMIT_UP, 1, "一字涨停", "互联网金融反包中军"),
-        SectorStockDef("000158.SZ", "常山北明", ThematicSectorType.YESTERDAY_LIMIT_UP, 1, "昨板接力", "华为鸿蒙概念核心龙头"),
-        SectorStockDef("300339.SZ", "润和软件", ThematicSectorType.YESTERDAY_LIMIT_UP, 1, "高溢价", "开源鸿蒙生态核心领航"),
-        SectorStockDef("002261.SZ", "拓维信息", ThematicSectorType.YESTERDAY_LIMIT_UP, 1, "放量反包", "华为昇腾算力核心伙伴"),
-        SectorStockDef("001696.SZ", "宗申动力", ThematicSectorType.YESTERDAY_LIMIT_UP, 1, "首板晋级", "低空经济航空发动机"),
-        SectorStockDef("002456.SZ", "欧菲光", ThematicSectorType.YESTERDAY_LIMIT_UP, 1, "放量突破", "华为手机摄像头模组"),
-        SectorStockDef("600839.SS", "四川长虹", ThematicSectorType.YESTERDAY_LIMIT_UP, 1, "超高溢价", "天宫算力底座规模出货"),
-        SectorStockDef("601727.SS", "上海电气", ThematicSectorType.YESTERDAY_LIMIT_UP, 1, "换手连板", "工业母机+重型电装中军"),
-        SectorStockDef("002583.SZ", "海能达", ThematicSectorType.YESTERDAY_LIMIT_UP, 1, "强力反包", "集群通信系统出海加速"),
-        SectorStockDef("000536.SZ", "华映科技", ThematicSectorType.YESTERDAY_LIMIT_UP, 1, "缩量封死", "车载全贴合视窗模组龙头"),
-        SectorStockDef("603268.SS", "松发股份", ThematicSectorType.YESTERDAY_LIMIT_UP, 1, "一字开板", "恒力造船注入预期强劲"),
-        SectorStockDef("002094.SZ", "青岛金王", ThematicSectorType.YESTERDAY_LIMIT_UP, 1, "反包走强", "跨境支付与跨境电商结合"),
-        SectorStockDef("600292.SS", "远达环保", ThematicSectorType.YESTERDAY_LIMIT_UP, 1, "电投重组", "清洁能源资产证券化"),
-        SectorStockDef("000958.SZ", "电投产融", ThematicSectorType.YESTERDAY_LIMIT_UP, 1, "复牌一字", "金融牌照与能源整合示范"),
-        SectorStockDef("603106.SS", "恒银科技", ThematicSectorType.YESTERDAY_LIMIT_UP, 1, "信创晋级", "金融级自主安全设备"),
-        SectorStockDef("300046.SZ", "台基股份", ThematicSectorType.YESTERDAY_LIMIT_UP, 1, "20cm大阳", "大功率半导体晶闸管"),
-        SectorStockDef("301297.SZ", "富乐德", ThematicSectorType.YESTERDAY_LIMIT_UP, 1, "20cm首板", "半导体精密洗净核心龙头"),
-        SectorStockDef("300489.SZ", "光智科技", ThematicSectorType.YESTERDAY_LIMIT_UP, 1, "资产收购", "红外光学与先进制程材料"),
-        SectorStockDef("300757.SZ", "罗博特科", ThematicSectorType.YESTERDAY_LIMIT_UP, 1, "高位反弹", "硅光芯片光模块组装机"),
-        SectorStockDef("300476.SZ", "胜宏科技", ThematicSectorType.YESTERDAY_LIMIT_UP, 1, "多头主升", "高阶高密度算力PCB龙头"),
-        SectorStockDef("688256.SS", "寒武纪", ThematicSectorType.YESTERDAY_LIMIT_UP, 1, "科创板旗舰", "国产大算力AI训练芯片"),
-        SectorStockDef("002085.SZ", "万丰奥威", ThematicSectorType.YESTERDAY_LIMIT_UP, 1, "低空龙头", "海外通航基地量产交付"),
-        SectorStockDef("000099.SZ", "中信海直", ThematicSectorType.YESTERDAY_LIMIT_UP, 1, "通航接力", "海上油气飞行服务领航"),
-        SectorStockDef("603038.SS", "华立股份", ThematicSectorType.YESTERDAY_LIMIT_UP, 1, "跨界智算", "大数据算力集群运营"),
+        SectorStockDef("301190.SZ", "善水科技", ThematicSectorType.YESTERDAY_LIMIT_UP, 2, "20cm连板", "精细化工染料中间体·昨日2板晋级"),
+        SectorStockDef("301560.SZ", "众捷股份", ThematicSectorType.YESTERDAY_LIMIT_UP, 1, "首板晋级", "汽车热管理与流体管路核心供应商"),
+        SectorStockDef("002242.SZ", "九阳股份", ThematicSectorType.YESTERDAY_LIMIT_UP, 2, "昨板连板", "小家电龙头·昨日2板晋级"),
+        SectorStockDef("002866.SZ", "传艺科技", ThematicSectorType.YESTERDAY_LIMIT_UP, 1, "连板晋级", "钠电量产领跑·昨日首板晋级"),
+        SectorStockDef("002058.SZ", "紫竹高科", ThematicSectorType.YESTERDAY_LIMIT_UP, 1, "连板晋级", "固态电池核心材料·昨日首板晋级"),
+        SectorStockDef("605303.SS", "园林股份", ThematicSectorType.YESTERDAY_LIMIT_UP, 1, "连板晋级", "生态园林与化债·昨日首板晋级"),
+        SectorStockDef("603200.SS", "上海洗霸", ThematicSectorType.YESTERDAY_LIMIT_UP, 1, "连板晋级", "固态电池电解质·昨日首板晋级"),
+        SectorStockDef("600825.SS", "新华传媒", ThematicSectorType.YESTERDAY_LIMIT_UP, 6, "高位连板", "文化传媒核心领航·昨日6板晋级7板"),
+        SectorStockDef("000678.SZ", "襄阳轴承", ThematicSectorType.YESTERDAY_LIMIT_UP, 3, "连板晋级", "减速器轴承龙头·昨日3板晋级4板"),
+        SectorStockDef("603188.SS", "亚邦股份", ThematicSectorType.YESTERDAY_LIMIT_UP, 1, "连板晋级", "精细化工染料·昨日首板晋级"),
+        SectorStockDef("000011.SZ", "深物业A", ThematicSectorType.YESTERDAY_LIMIT_UP, 2, "连板晋级", "深圳国资地产·昨日2板晋级3板"),
+        SectorStockDef("605388.SS", "均瑶健康", ThematicSectorType.YESTERDAY_LIMIT_UP, 1, "连板晋级", "乳酸菌饮品·昨日首板晋级"),
+        SectorStockDef("600241.SS", "时代万恒", ThematicSectorType.YESTERDAY_LIMIT_UP, 2, "连板晋级", "高能锂电池·昨日2板晋级3板"),
+        SectorStockDef("301513.SZ", "尚水智能", ThematicSectorType.YESTERDAY_LIMIT_UP, 1, "智能制造", "新能源锂电高效制浆装备"),
+        SectorStockDef("002244.SZ", "滨江集团", ThematicSectorType.YESTERDAY_LIMIT_UP, 1, "优质地产", "长三角高信用区域房企旗舰"),
+        SectorStockDef("600657.SS", "信达地产", ThematicSectorType.YESTERDAY_LIMIT_UP, 1, "央企地产", "不良资产重组与专业代建服务"),
+        SectorStockDef("000002.SZ", "万科Ａ", ThematicSectorType.YESTERDAY_LIMIT_UP, 1, "行业龙头", "全国性房地产综合开发中军旗舰"),
+        SectorStockDef("601238.SS", "广汽集团", ThematicSectorType.YESTERDAY_LIMIT_UP, 1, "整车智驾", "埃安新能源与高阶自动驾驶量产"),
+        SectorStockDef("601811.SS", "新华文轩", ThematicSectorType.YESTERDAY_LIMIT_UP, 1, "出版传媒", "西南出版发行龙头与智慧教育"),
+        SectorStockDef("688685.SS", "迈信林", ThematicSectorType.YESTERDAY_LIMIT_UP, 1, "航空航天", "民用与军工航空结构件核心配套"),
+        SectorStockDef("300085.SZ", "银之杰", ThematicSectorType.YESTERDAY_LIMIT_UP, 1, "互金龙头", "互联网金融+大数据征信中军"),
+        SectorStockDef("000158.SZ", "常山北明", ThematicSectorType.YESTERDAY_LIMIT_UP, 1, "鸿蒙领航", "华为鸿蒙软件核心旗舰"),
+        SectorStockDef("300339.SZ", "润和软件", ThematicSectorType.YESTERDAY_LIMIT_UP, 1, "开源鸿蒙", "全场景生态共建旗舰"),
+        SectorStockDef("002261.SZ", "拓维信息", ThematicSectorType.YESTERDAY_LIMIT_UP, 1, "昇腾算力", "一体化AI软硬件方案"),
 
         // 趋势股 (机构重仓 / 均线多头主升浪)
         SectorStockDef("300750.SZ", "宁德时代", ThematicSectorType.TREND_STOCKS, null, "全球龙头", "全球动力电池霸主·主升浪"),
@@ -1038,9 +1548,17 @@ class StockRepository(
         for (type in bkSectors) {
             try {
                 if (type == ThematicSectorType.MULTI_BOARD) {
-                    val gainers = fetchDirectSinaMarketCenterGainers(page = 1, pageSize = 35)
-                    if (gainers.isNotEmpty()) {
-                        resultMap[type]?.addAll(gainers)
+                    val pool = fetchDirectEastMoneyMultiBoardPool(page = 1, pageSize = 35)
+                    if (pool.isNotEmpty()) {
+                        resultMap[type]?.addAll(pool)
+                        anyLoaded = true
+                        continue
+                    }
+                }
+                if (type == ThematicSectorType.YESTERDAY_LIMIT_UP) {
+                    val pool = fetchDirectEastMoneyYesterdayZTPool(page = 1, pageSize = 35)
+                    if (pool.isNotEmpty()) {
+                        resultMap[type]?.addAll(pool)
                         anyLoaded = true
                         continue
                     }
@@ -1390,11 +1908,19 @@ class StockRepository(
         val isIndustrySector = StockIndustryRegistry.isIndustrySector(clean)
         val defaultIndName = StockIndustryRegistry.getSectorName(clean)
 
-        // Native fast path for BK1638 (连板天梯 / 涨停股): Sina VIP Market Center live gainers
-        if (clean == "BK1638" || clean == "1638") {
-            val sinaGainers = fetchDirectSinaMarketCenterGainers(page = page, pageSize = pageSize)
-            if (sinaGainers.isNotEmpty()) {
-                return SectorConstituentsPageResult(sinaGainers, maxOf(80, sinaGainers.size), null)
+        // Native fast path for BK1050 / BK0815 (昨日涨停): Official EastMoney push2ex pool
+        if (clean in listOf("BK1050", "BK0815", "1050", "0815")) {
+            val yztPool = fetchDirectEastMoneyYesterdayZTPool(page = page, pageSize = pageSize)
+            if (yztPool.isNotEmpty()) {
+                return SectorConstituentsPageResult(yztPool, maxOf(57, yztPool.size), null)
+            }
+        }
+
+        // Native fast path for BK1638 / BK0816 (最近多板 / 连板天梯): Official EastMoney push2ex pool
+        if (clean in listOf("BK1638", "BK0816", "1638", "0816")) {
+            val mbPool = fetchDirectEastMoneyMultiBoardPool(page = page, pageSize = pageSize)
+            if (mbPool.isNotEmpty()) {
+                return SectorConstituentsPageResult(mbPool, maxOf(52, mbPool.size), null)
             }
         }
 
@@ -1595,8 +2121,12 @@ class StockRepository(
 
     private fun fetchEastMoneySectorConstituentsFull(bkCode: String, maxItems: Int = 2000): SectorConstituentsFullResult {
         val clean = bkCode.trim().uppercase()
-        if (clean == "BK1638" || clean == "1638") {
-            val page1 = fetchEastMoneySectorConstituentsPage(clean, page = 1, pageSize = 80)
+        if (clean in listOf("BK1050", "BK0815", "1050", "0815")) {
+            val page1 = fetchEastMoneySectorConstituentsPage(clean, page = 1, pageSize = 200)
+            return SectorConstituentsFullResult(page1.items, page1.total, page1.diagnosticInfo)
+        }
+        if (clean in listOf("BK1638", "BK0816", "1638", "0816")) {
+            val page1 = fetchEastMoneySectorConstituentsPage(clean, page = 1, pageSize = 200)
             return SectorConstituentsFullResult(page1.items, page1.total, page1.diagnosticInfo)
         }
 
