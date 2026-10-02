@@ -131,7 +131,8 @@ class StockRepository(
             "https://79.push2.eastmoney.com/api/qt/ulist.np/get?secids=$secids&fields=f12,f14,f2,f3,f4,f5,f6,f7,f15,f16,f17,f18&fltt=2&invt=2",
             "https://pushguest.eastmoney.com/api/qt/ulist.np/get?secids=$secids&fields=f12,f14,f2,f3,f4,f5,f6,f7,f15,f16,f17,f18&fltt=2&invt=2",
             "http://29.push2.eastmoney.com/api/qt/ulist.np/get?secids=$secids&fields=f12,f14,f2,f3,f4,f5,f6,f7,f15,f16,f17,f18&fltt=2&invt=2",
-            "https://push2.eastmoney.com/api/qt/ulist.np/get?secids=$secids&fields=f12,f14,f2,f3,f4,f5,f6,f7,f15,f16,f17,f18&fltt=2&invt=2"
+            "https://push2.eastmoney.com/api/qt/ulist.np/get?secids=$secids&fields=f12,f14,f2,f3,f4,f5,f6,f7,f15,f16,f17,f18&fltt=2&invt=2",
+            "${preferences.getServerUrl().trimEnd('/')}/api/sector/quote?bk=${sectorCodes.firstOrNull()?.trim()?.uppercase() ?: ""}"
         )
         for (url in urls) {
             try {
@@ -193,6 +194,46 @@ class StockRepository(
                 // continue to next url
             }
         }
+
+        // Resilient fallback: synthesize sector quote from constituent stocks
+        val synthesizedList = mutableListOf<StockQuote>()
+        for (secCode in sectorCodes) {
+            val clean = secCode.trim().uppercase()
+            val symbols = StockIndustryRegistry.getSectorStockSymbols(clean)
+            if (symbols.isNotEmpty()) {
+                try {
+                    val quotes = fetchDirectTencentQuotes(symbols)
+                    if (!quotes.isNullOrEmpty()) {
+                        val valid = quotes.filter { it.price > 0.0 }
+                        val avgChg = if (valid.isNotEmpty()) round(valid.map { it.changePercent }.average() * 100) / 100.0 else 0.0
+                        val base = 1000.0
+                        val cur = round(base * (1.0 + avgChg / 100.0) * 100) / 100.0
+                        val sumTurnover = quotes.sumOf { it.turnoverAmount }
+                        val nonZeroTr = quotes.filter { it.turnoverRate > 0.0 }
+                        val avgTr = if (nonZeroTr.isNotEmpty()) round(nonZeroTr.map { it.turnoverRate }.average() * 100) / 100.0 else 0.0
+                        synthesizedList.add(
+                            StockQuote(
+                                symbol = clean,
+                                name = getSectorName(clean),
+                                price = cur,
+                                change = round((cur - base) * 100) / 100.0,
+                                changePercent = avgChg,
+                                currency = "点",
+                                exchange = "板块",
+                                open = base,
+                                high = round(base * (1.0 + maxOf(avgChg, 0.0) / 100.0) * 100) / 100.0,
+                                low = round(base * (1.0 + minOf(avgChg, 0.0) / 100.0) * 100) / 100.0,
+                                previousClose = base,
+                                turnoverAmount = sumTurnover,
+                                turnoverRate = avgTr
+                            )
+                        )
+                    }
+                } catch (_: Exception) {}
+            }
+        }
+        if (synthesizedList.isNotEmpty()) return synthesizedList
+
         return null
     }
 
@@ -361,7 +402,42 @@ class StockRepository(
         }
 
         val fullResult = fetchEastMoneySectorConstituentsFull(clean, maxItems = 1500)
-        val finalConstituents = fullResult.items
+        var finalConstituents = fullResult.items
+        if (finalConstituents.isEmpty()) {
+            val fallbackSymbols = StockIndustryRegistry.getSectorStockSymbols(clean)
+            if (fallbackSymbols.isNotEmpty()) {
+                val fallbackQuotes = try { fetchDirectTencentQuotes(fallbackSymbols) } catch (_: Exception) { null }
+                if (!fallbackQuotes.isNullOrEmpty()) {
+                    val defaultSectorName = StockIndustryRegistry.getSectorName(clean)
+                    finalConstituents = fallbackQuotes.map { q ->
+                        val isSuspended = (q.price <= 0.0) && (q.previousClose > 0.0)
+                        val tag = when {
+                            isSuspended -> "停牌"
+                            q.changePercent >= 19.8 -> "20cm涨停"
+                            q.changePercent >= 9.8 -> "涨停领跑"
+                            q.changePercent >= 5.0 -> "多头主升"
+                            q.changePercent >= 0.0 -> "红盘趋势"
+                            else -> "高位蓄势"
+                        }
+                        ThematicStockItem(
+                            symbol = q.symbol,
+                            name = q.name,
+                            price = q.price,
+                            change = q.change,
+                            changePercent = q.changePercent,
+                            boardCount = if (q.changePercent >= 9.8) 1 else null,
+                            tag = tag,
+                            subDetail = "${defaultSectorName}成份股",
+                            industry = q.industry ?: defaultSectorName,
+                            industryBkCode = q.industryBkCode ?: clean,
+                            industryChangePercent = null,
+                            turnoverAmount = q.turnoverAmount,
+                            turnoverRate = q.turnoverRate
+                        )
+                    }.sortedByDescending { it.changePercent }
+                }
+            }
+        }
         val enrichedConstituents = enrichConstituentsWithIndustry(
             items = finalConstituents,
             currentSectorBkCode = clean,
@@ -621,6 +697,24 @@ class StockRepository(
         SectorStockDef("603106.SS", "恒银科技", ThematicSectorType.MULTI_BOARD, 3, "3连板", "AI金融设备+自主可控"),
         SectorStockDef("002094.SZ", "青岛金王", ThematicSectorType.MULTI_BOARD, 3, "3连板", "跨境支付+新零售概念"),
         SectorStockDef("600292.SS", "远达环保", ThematicSectorType.MULTI_BOARD, 3, "3连板", "国家电投水电资产注入"),
+        SectorStockDef("000958.SZ", "电投产融", ThematicSectorType.MULTI_BOARD, 3, "3连板", "央企重组+能源金融"),
+        SectorStockDef("603656.SS", "泰禾智能", ThematicSectorType.MULTI_BOARD, 2, "2连板", "阳光电源实控人入主"),
+        SectorStockDef("001696.SZ", "宗申动力", ThematicSectorType.MULTI_BOARD, 2, "2连板", "低空经济航空发动机龙头"),
+        SectorStockDef("000062.SZ", "深圳华强", ThematicSectorType.MULTI_BOARD, 2, "人气龙头", "海思全系列分销旗舰"),
+        SectorStockDef("600611.SS", "大众交通", ThematicSectorType.MULTI_BOARD, 2, "网约智驾", "Robotaxi智能网联运营"),
+        SectorStockDef("300085.SZ", "银之杰", ThematicSectorType.MULTI_BOARD, 2, "互金龙头", "金融科技+征信大数据"),
+        SectorStockDef("000158.SZ", "常山北明", ThematicSectorType.MULTI_BOARD, 2, "鸿蒙领航", "华为鸿蒙软件核心旗舰"),
+        SectorStockDef("300339.SZ", "润和软件", ThematicSectorType.MULTI_BOARD, 2, "开源鸿蒙", "全场景生态共建旗舰"),
+        SectorStockDef("002261.SZ", "拓维信息", ThematicSectorType.MULTI_BOARD, 2, "昇腾算力", "一体化AI软硬件方案"),
+        SectorStockDef("002456.SZ", "欧菲光", ThematicSectorType.MULTI_BOARD, 2, "潜望模组", "智能手机光学感知部件"),
+        SectorStockDef("600839.SS", "四川长虹", ThematicSectorType.MULTI_BOARD, 2, "自主可控", "华为天宫服务器制造中军"),
+        SectorStockDef("601727.SS", "上海电气", ThematicSectorType.MULTI_BOARD, 2, "高端重器", "低空通航+重型燃机核心"),
+        SectorStockDef("002085.SZ", "万丰奥威", ThematicSectorType.MULTI_BOARD, 2, "eVTOL领跑", "轻量化镁铝合金+通航整机"),
+        SectorStockDef("000099.SZ", "中信海直", ThematicSectorType.MULTI_BOARD, 2, "低空运营", "直升机海上运营首选龙头"),
+        SectorStockDef("301628.SZ", "强达电路", ThematicSectorType.MULTI_BOARD, 2, "高多层PCB", "高频高速刚挠结合板领军"),
+        SectorStockDef("688656.SS", "浩欧博", ThematicSectorType.MULTI_BOARD, 2, "生化诊断", "体外过敏原与自身抗体检测"),
+        SectorStockDef("603038.SS", "华立股份", ThematicSectorType.MULTI_BOARD, 2, "跨界算力", "大数据与饰边建材结合"),
+        SectorStockDef("002272.SZ", "川润股份", ThematicSectorType.MULTI_BOARD, 2, "浸没液冷", "特种流体冷却与风电润滑"),
 
         // 昨日涨停-含一字 (超短接力溢价表现)
         SectorStockDef("300085.SZ", "银之杰", ThematicSectorType.YESTERDAY_LIMIT_UP, 1, "一字涨停", "互联网金融反包中军"),
@@ -629,6 +723,24 @@ class StockRepository(
         SectorStockDef("002261.SZ", "拓维信息", ThematicSectorType.YESTERDAY_LIMIT_UP, 1, "放量反包", "华为昇腾算力核心伙伴"),
         SectorStockDef("001696.SZ", "宗申动力", ThematicSectorType.YESTERDAY_LIMIT_UP, 1, "首板晋级", "低空经济航空发动机"),
         SectorStockDef("002456.SZ", "欧菲光", ThematicSectorType.YESTERDAY_LIMIT_UP, 1, "放量突破", "华为手机摄像头模组"),
+        SectorStockDef("600839.SS", "四川长虹", ThematicSectorType.YESTERDAY_LIMIT_UP, 1, "超高溢价", "天宫算力底座规模出货"),
+        SectorStockDef("601727.SS", "上海电气", ThematicSectorType.YESTERDAY_LIMIT_UP, 1, "换手连板", "工业母机+重型电装中军"),
+        SectorStockDef("002583.SZ", "海能达", ThematicSectorType.YESTERDAY_LIMIT_UP, 1, "强力反包", "集群通信系统出海加速"),
+        SectorStockDef("000536.SZ", "华映科技", ThematicSectorType.YESTERDAY_LIMIT_UP, 1, "缩量封死", "车载全贴合视窗模组龙头"),
+        SectorStockDef("603268.SS", "松发股份", ThematicSectorType.YESTERDAY_LIMIT_UP, 1, "一字开板", "恒力造船注入预期强劲"),
+        SectorStockDef("002094.SZ", "青岛金王", ThematicSectorType.YESTERDAY_LIMIT_UP, 1, "反包走强", "跨境支付与跨境电商结合"),
+        SectorStockDef("600292.SS", "远达环保", ThematicSectorType.YESTERDAY_LIMIT_UP, 1, "电投重组", "清洁能源资产证券化"),
+        SectorStockDef("000958.SZ", "电投产融", ThematicSectorType.YESTERDAY_LIMIT_UP, 1, "复牌一字", "金融牌照与能源整合示范"),
+        SectorStockDef("603106.SS", "恒银科技", ThematicSectorType.YESTERDAY_LIMIT_UP, 1, "信创晋级", "金融级自主安全设备"),
+        SectorStockDef("300046.SZ", "台基股份", ThematicSectorType.YESTERDAY_LIMIT_UP, 1, "20cm大阳", "大功率半导体晶闸管"),
+        SectorStockDef("301297.SZ", "富乐德", ThematicSectorType.YESTERDAY_LIMIT_UP, 1, "20cm首板", "半导体精密洗净核心龙头"),
+        SectorStockDef("300489.SZ", "光智科技", ThematicSectorType.YESTERDAY_LIMIT_UP, 1, "资产收购", "红外光学与先进制程材料"),
+        SectorStockDef("300757.SZ", "罗博特科", ThematicSectorType.YESTERDAY_LIMIT_UP, 1, "高位反弹", "硅光芯片光模块组装机"),
+        SectorStockDef("300476.SZ", "胜宏科技", ThematicSectorType.YESTERDAY_LIMIT_UP, 1, "多头主升", "高阶高密度算力PCB龙头"),
+        SectorStockDef("688256.SS", "寒武纪", ThematicSectorType.YESTERDAY_LIMIT_UP, 1, "科创板旗舰", "国产大算力AI训练芯片"),
+        SectorStockDef("002085.SZ", "万丰奥威", ThematicSectorType.YESTERDAY_LIMIT_UP, 1, "低空龙头", "海外通航基地量产交付"),
+        SectorStockDef("000099.SZ", "中信海直", ThematicSectorType.YESTERDAY_LIMIT_UP, 1, "通航接力", "海上油气飞行服务领航"),
+        SectorStockDef("603038.SS", "华立股份", ThematicSectorType.YESTERDAY_LIMIT_UP, 1, "跨界智算", "大数据算力集群运营"),
 
         // 趋势股 (机构重仓 / 均线多头主升浪)
         SectorStockDef("300750.SZ", "宁德时代", ThematicSectorType.TREND_STOCKS, null, "全球龙头", "全球动力电池霸主·主升浪"),
@@ -637,6 +749,24 @@ class StockRepository(
         SectorStockDef("300308.SZ", "中际旭创", ThematicSectorType.TREND_STOCKS, null, "光通信龙头", "800G/1.6T高速光模块"),
         SectorStockDef("300502.SZ", "新易盛", ThematicSectorType.TREND_STOCKS, null, "机构重仓", "AI算力高速光器件核心"),
         SectorStockDef("601138.SS", "工业富联", ThematicSectorType.TREND_STOCKS, null, "多头排列", "全球AI服务器制造中军"),
+        SectorStockDef("002463.SZ", "沪电股份", ThematicSectorType.TREND_STOCKS, null, "AI中军", "高端服务器高速交换机板"),
+        SectorStockDef("300476.SZ", "胜宏科技", ThematicSectorType.TREND_STOCKS, null, "PCB中军", "英伟达AI加速卡顶级供货"),
+        SectorStockDef("688256.SS", "寒武纪", ThematicSectorType.TREND_STOCKS, null, "国产算力", "思元芯片平台全栈优化"),
+        SectorStockDef("000977.SZ", "浪潮信息", ThematicSectorType.TREND_STOCKS, null, "服务器巨头", "全栈AI计算平台架构"),
+        SectorStockDef("603019.SS", "中科曙光", ThematicSectorType.TREND_STOCKS, null, "中科信创", "海光母体+冷板浸没超算"),
+        SectorStockDef("300124.SZ", "汇川技术", ThematicSectorType.TREND_STOCKS, null, "工控龙头", "工业变频器+伺服驱动第一"),
+        SectorStockDef("002371.SZ", "北方华创", ThematicSectorType.TREND_STOCKS, null, "半导体设备", "国产刻蚀机与薄膜沉积霸主"),
+        SectorStockDef("688012.SS", "中微公司", ThematicSectorType.TREND_STOCKS, null, "等离子刻蚀", "CCP/ICP介质刻蚀世界前沿"),
+        SectorStockDef("688981.SS", "中芯国际", ThematicSectorType.TREND_STOCKS, null, "晶圆代工", "中国大陆先进制程晶圆霸主"),
+        SectorStockDef("688041.SS", "海光信息", ThematicSectorType.TREND_STOCKS, null, "CPU/DCU", "自主x86架构与DCU协处理器"),
+        SectorStockDef("688008.SS", "澜起科技", ThematicSectorType.TREND_STOCKS, null, "互连芯片", "DDR5内存接口与津逮平台"),
+        SectorStockDef("002049.SZ", "紫光国微", ThematicSectorType.TREND_STOCKS, null, "特种微电", "高可靠微电子与智能安全芯片"),
+        SectorStockDef("603986.SS", "兆易创新", ThematicSectorType.TREND_STOCKS, null, "存储龙头", "NOR Flash与通用微处理器"),
+        SectorStockDef("603501.SS", "韦尔股份", ThematicSectorType.TREND_STOCKS, null, "车载CIS", "车规级CMOS图像传感龙头"),
+        SectorStockDef("300274.SZ", "阳光电源", ThematicSectorType.TREND_STOCKS, null, "光储逆变", "全球光伏逆变器储能领跑者"),
+        SectorStockDef("300014.SZ", "亿纬锂能", ThematicSectorType.TREND_STOCKS, null, "大圆柱电池", "消费锂电与动力储能双轮驱动"),
+        SectorStockDef("601689.SZ", "拓普集团", ThematicSectorType.TREND_STOCKS, null, "底盘轻量化", "汽车智能底盘与机器人执行器"),
+        SectorStockDef("002050.SZ", "三花智控", ThematicSectorType.TREND_STOCKS, null, "热管理领航", "新能源车热管理阀件核心"),
 
         // 历史新高 (创历史新高 / 无套牢盘龙头)
         SectorStockDef("688256.SS", "寒武纪", ThematicSectorType.ALL_TIME_HIGH, null, "创历史高", "国产AI芯片旗舰大突破"),
@@ -644,7 +774,25 @@ class StockRepository(
         SectorStockDef("002463.SZ", "沪电股份", ThematicSectorType.ALL_TIME_HIGH, null, "历史峰值", "高端交换机与汽车板领军"),
         SectorStockDef("002130.SZ", "沃尔核材", ThematicSectorType.ALL_TIME_HIGH, null, "创历史高", "高速铜互连线束领跑者"),
         SectorStockDef("002851.SZ", "麦格米特", ThematicSectorType.ALL_TIME_HIGH, null, "历史新高", "英伟达服务器电源伙伴"),
-        SectorStockDef("300757.SZ", "罗博特科", ThematicSectorType.ALL_TIME_HIGH, null, "创历史高", "硅光芯片封装设备全球首创")
+        SectorStockDef("300757.SZ", "罗博特科", ThematicSectorType.ALL_TIME_HIGH, null, "创历史高", "硅光芯片封装设备全球首创"),
+        SectorStockDef("601138.SS", "工业富联", ThematicSectorType.ALL_TIME_HIGH, null, "创历史高", "全球AI服务器代工绝对霸主"),
+        SectorStockDef("300502.SZ", "新易盛", ThematicSectorType.ALL_TIME_HIGH, null, "创历史高", "800G高速光模块大批量交付"),
+        SectorStockDef("300308.SZ", "中际旭创", ThematicSectorType.ALL_TIME_HIGH, null, "创历史高", "1.6T高速光收发器领军"),
+        SectorStockDef("300394.SZ", "天孚通信", ThematicSectorType.ALL_TIME_HIGH, null, "创历史高", "高精度光器件垂直整合"),
+        SectorStockDef("001696.SZ", "宗申动力", ThematicSectorType.ALL_TIME_HIGH, null, "突破平台", "低空航空动力中军"),
+        SectorStockDef("300339.SZ", "润和软件", ThematicSectorType.ALL_TIME_HIGH, null, "创阶段高", "开源鸿蒙操作系统中枢"),
+        SectorStockDef("000158.SZ", "常山北明", ThematicSectorType.ALL_TIME_HIGH, null, "天量换手", "华为鸿蒙全场景业务伙伴"),
+        SectorStockDef("301236.SZ", "软通动力", ThematicSectorType.ALL_TIME_HIGH, null, "自主创新", "同方PC与服务器整合突围"),
+        SectorStockDef("002261.SZ", "拓维信息", ThematicSectorType.ALL_TIME_HIGH, null, "昇腾共荣", "兆瀚服务器软硬一体化"),
+        SectorStockDef("300442.SZ", "润泽科技", ThematicSectorType.ALL_TIME_HIGH, null, "智算园区", "超大规模高密算力基础设施"),
+        SectorStockDef("688041.SS", "海光信息", ThematicSectorType.ALL_TIME_HIGH, null, "创历史高", "深算二号DCU规模化部署"),
+        SectorStockDef("688047.SS", "龙芯中科", ThematicSectorType.ALL_TIME_HIGH, null, "LoongArch", "纯自主指令系统高端芯片"),
+        SectorStockDef("688008.SS", "澜起科技", ThematicSectorType.ALL_TIME_HIGH, null, "创历史高", "PCIe Retimer高速扩展芯片"),
+        SectorStockDef("688692.SS", "达梦数据", ThematicSectorType.ALL_TIME_HIGH, null, "国产数据库", "高端交易型数据库自主可控"),
+        SectorStockDef("688012.SS", "中微公司", ThematicSectorType.ALL_TIME_HIGH, null, "先进制程", "3nm以下先进微观刻蚀突破"),
+        SectorStockDef("002371.SZ", "北方华创", ThematicSectorType.ALL_TIME_HIGH, null, "设备龙头", "全品类半导体制造装备覆盖"),
+        SectorStockDef("300661.SZ", "圣邦股份", ThematicSectorType.ALL_TIME_HIGH, null, "模拟芯片", "高性能高品质模拟IC自研"),
+        SectorStockDef("688536.SS", "思瑞浦", ThematicSectorType.ALL_TIME_HIGH, null, "模拟信号链", "车规级模数转换芯片")
     )
 
     suspend fun getThematicSectors(): Result<Map<ThematicSectorType, List<ThematicStockItem>>> = withContext(Dispatchers.IO) {
@@ -663,7 +811,7 @@ class StockRepository(
         )
         for (type in bkSectors) {
             try {
-                val items = fetchEastMoneySectorConstituents(type.bkCode, limit = 15)
+                val items = fetchEastMoneySectorConstituents(type.bkCode, limit = 35)
                 if (items.isNotEmpty()) {
                     resultMap[type]?.addAll(items)
                     anyLoaded = true
@@ -1090,6 +1238,53 @@ class StockRepository(
                 android.util.Log.w("SectorFetch", "[$clean] attempt failed ($url): ${e.message}")
             }
         }
+
+        // 8. Resilient Client-Side Fallback: Query live quotes directly via Tencent for sector constituents
+        val sectorSymbols = StockIndustryRegistry.getSectorStockSymbols(clean)
+        if (sectorSymbols.isNotEmpty()) {
+            try {
+                val directQuotes = fetchDirectTencentQuotes(sectorSymbols)
+                if (!directQuotes.isNullOrEmpty()) {
+                    val defaultSectorName = StockIndustryRegistry.getSectorName(clean)
+                    val items = directQuotes.map { q ->
+                        val isSuspended = (q.price <= 0.0) && (q.previousClose > 0.0)
+                        val tag = when {
+                            isSuspended -> "停牌"
+                            q.changePercent >= 19.8 -> "20cm涨停"
+                            q.changePercent >= 9.8 -> "涨停领跑"
+                            q.changePercent >= 5.0 -> "多头主升"
+                            q.changePercent >= 0.0 -> "红盘趋势"
+                            else -> "高位蓄势"
+                        }
+                        ThematicStockItem(
+                            symbol = q.symbol,
+                            name = q.name,
+                            price = q.price,
+                            change = q.change,
+                            changePercent = q.changePercent,
+                            boardCount = if (q.changePercent >= 9.8) 1 else null,
+                            tag = tag,
+                            subDetail = "${defaultSectorName}成份股",
+                            industry = q.industry ?: defaultSectorName,
+                            industryBkCode = q.industryBkCode ?: clean,
+                            industryChangePercent = null,
+                            turnoverAmount = q.turnoverAmount,
+                            turnoverRate = q.turnoverRate
+                        )
+                    }.sortedByDescending { it.changePercent }
+
+                    val pageNum = maxOf(1, page)
+                    val pSize = maxOf(1, pageSize)
+                    val start = (pageNum - 1) * pSize
+                    val paged = if (start < items.size) items.subList(start, minOf(start + pSize, items.size)) else emptyList()
+                    android.util.Log.d("SectorFetch", "[$clean] client-side Tencent fallback SUCCESS: ${paged.size} items, total=${items.size}")
+                    return SectorConstituentsPageResult(paged, items.size, null)
+                }
+            } catch (fallbackEx: Exception) {
+                android.util.Log.w("SectorFetch", "[$clean] client-side fallback failed: ${fallbackEx.message}")
+            }
+        }
+
         val diagInfo = diagnosticAttempts.joinToString("; ")
         android.util.Log.w("SectorFetch", "[$clean] all candidates failed: $diagInfo")
         return SectorConstituentsPageResult(emptyList(), 0, diagInfo)

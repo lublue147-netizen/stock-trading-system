@@ -1,5 +1,5 @@
 name = "stock-trading-worker"
-main = "src/index.ts"
+main = "worker.js"
 compatibility_date = "2024-12-01"
 
 # Enable nodejs compat if needed

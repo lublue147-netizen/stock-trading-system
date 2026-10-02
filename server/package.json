@@ -2,7 +2,8 @@
   "name": "stock-trading-worker",
   "version": "1.0.0",
   "description": "Cloudflare Worker backend for Stock Trading & Quotation App",
-  "main": "src/index.ts",
+  "main": "worker.js",
+  "type": "module",
   "scripts": {
     "dev": "wrangler dev",
     "deploy": "wrangler deploy",

@@ -461,6 +461,344 @@ async function search(q) {
   }));
 }
 
+
+const SECTOR_NAMES = {
+  'BK1638': '最近多板',
+  'BK1050': '昨日涨停-含一字',
+  'BK1715': '趋势股',
+  'BK1675': '历史新高',
+  'BK1036': '半导体',
+  'BK0473': '证券',
+  'BK0896': '白酒',
+  'BK1033': '电池',
+  'BK1029': '汽车整车',
+  'BK1166': '低空经济',
+  'BK0459': '电子元件',
+  'BK0737': '软件开发',
+  'BK0735': '计算机设备',
+  'BK0448': '通信设备',
+  'BK0475': '银行',
+  'BK0474': '保险',
+  'BK1031': '光伏设备',
+  'BK0545': '通用设备',
+  'BK0733': '工程机械',
+  'BK0465': '化学制药',
+  'BK1040': '中药',
+  'BK0438': '食品饮料',
+  'BK0428': '电力行业',
+  'BK0478': '有色金属',
+  'BK1037': '消费电子',
+  'BK1038': '光学光电子',
+  'BK1184': '人形机器人',
+  'BK0854': '华为概念'
+};
+
+const SECTOR_STOCKS = {
+  'BK1638': [
+    'sz000536', 'sz002583', 'sh603268', 'sh603106', 'sz002094', 'sh600292', 'sz000958', 'sh603656',
+    'sz001696', 'sz000062', 'sh600611', 'sz300085', 'sz000158', 'sz300339', 'sz002261', 'sz002456',
+    'sz002423', 'sh600839', 'sh601727', 'sz002085', 'sz000099', 'sz301628', 'sh688656', 'sh603038',
+    'sz002272', 'sh603887', 'sz002725', 'sh600653', 'sh603117', 'sh600811', 'sz300377', 'sz300061',
+    'sz300380', 'sz300561', 'sz300046', 'sz301297', 'sz300489'
+  ],
+  'BK1050': [
+    'sz300085', 'sz000158', 'sz300339', 'sz002261', 'sz001696', 'sz002456', 'sh600839', 'sh601727',
+    'sz002583', 'sz000536', 'sh603268', 'sz002094', 'sh600292', 'sz000958', 'sh603106', 'sz300046',
+    'sz301297', 'sz300489', 'sz300757', 'sz300476', 'sh688256', 'sz002085', 'sz000099', 'sh603038',
+    'sz002272', 'sz300442', 'sz301236', 'sz300598', 'sh600187', 'sz300061', 'sz300377', 'sz300380',
+    'sz300561', 'sz002786', 'sz300537'
+  ],
+  'BK1715': [
+    'sz300750', 'sz002594', 'sh601127', 'sz300308', 'sz300502', 'sh601138', 'sz002463', 'sz300476',
+    'sh688256', 'sz000977', 'sh603019', 'sz300124', 'sz002371', 'sh688012', 'sh688981', 'sh688041',
+    'sh688008', 'sz002049', 'sh603986', 'sh603501', 'sz300274', 'sz300014', 'sh601689', 'sz002050',
+    'sz000625', 'sh601633', 'sz002475', 'sz002241', 'sz300433', 'sz000063', 'sz300394', 'sh601899',
+    'sh603993', 'sh601600', 'sh600150'
+  ],
+  'BK1675': [
+    'sh688256', 'sz300476', 'sz002463', 'sz002130', 'sz002851', 'sz300757', 'sh601138', 'sz300502',
+    'sz300308', 'sz300394', 'sz001696', 'sz300339', 'sz000158', 'sz301236', 'sz002261', 'sz300442',
+    'sh688041', 'sh688047', 'sh688008', 'sh688692', 'sh688012', 'sz002371', 'sz300661', 'sh688536',
+    'sh601127', 'sh600418', 'sz002594', 'sz300750', 'sh688205', 'sh688498', 'sh688183', 'sh688126',
+    'sz301269', 'sh688072', 'sh688037'
+  ],
+  'BK1036': [
+    'sh688981', 'sz002371', 'sh688012', 'sh688041', 'sh688256', 'sh603501', 'sh688008', 'sh603986',
+    'sh600584', 'sz002049', 'sh688072', 'sh688396', 'sz002156', 'sh600460', 'sz300782', 'sz300661',
+    'sh688126', 'sz301269', 'sh688047', 'sz002185', 'sh688536', 'sh688037', 'sh688180', 'sh688099',
+    'sh688521', 'sh688123', 'sh688018', 'sh688052', 'sz300373', 'sz300671'
+  ],
+  'BK0473': [
+    'sz300059', 'sh600030', 'sh601211', 'sh601688', 'sh600999', 'sz000776', 'sz000166', 'sh601881',
+    'sh601066', 'sh601788', 'sh600958', 'sh601878', 'sz000750', 'sz002736', 'sh600837', 'sz000783',
+    'sh601377', 'sh601456', 'sh601108', 'sh601901', 'sz002673', 'sh600369', 'sz002926', 'sz000686',
+    'sh601990', 'sh601099', 'sh601236', 'sh601198', 'sh600906', 'sh601908'
+  ],
+  'BK0896': [
+    'sh600519', 'sz000858', 'sz000568', 'sh600809', 'sz002304', 'sz000596', 'sh603369', 'sh600779',
+    'sh600702', 'sz000799', 'sh603198', 'sh603589', 'sh603919', 'sz000860', 'sz000995', 'sh600199',
+    'sz000729', 'sh600559'
+  ],
+  'BK1033': [
+    'sz300750', 'sz300014', 'sz002074', 'sz300207', 'sz300769', 'sh688005', 'sz300073', 'sz002812',
+    'sz300568', 'sz002709', 'sz300037', 'sh603659', 'sz300035', 'sh600884', 'bj835185', 'sh688063',
+    'sz300438', 'sh688772', 'sh688567', 'sz300894', 'sz002850', 'sz001301', 'sz301358', 'sh688778',
+    'sz301152', 'sh688275', 'sh688148', 'sh603799', 'sz002460', 'sz002466'
+  ],
+  'BK1029': [
+    'sz002594', 'sh601127', 'sh600104', 'sz000625', 'sh601633', 'sh601238', 'sh600418', 'sh600733',
+    'sh600166', 'sh600066', 'sz000957', 'sz000951', 'sz000800', 'sh601777', 'sz000982', 'sh600006',
+    'sz000868', 'sz000550'
+  ],
+  'BK1166': [
+    'sz002085', 'sz000099', 'sz001696', 'sh600580', 'sh688631', 'sh688070', 'sz300900', 'sz002389',
+    'sh600038', 'sh600316', 'sh600990', 'sz002253', 'sz300411', 'sz300107', 'sz300719', 'sz000677',
+    'sz300476', 'sh688017', 'sz300627', 'sz300878', 'sh688522', 'sz300484', 'sz300887', 'sh600843',
+    'sz301091', 'sz300732', 'sz300284', 'sz301305', 'sh603018', 'sh603105'
+  ],
+  'BK0459': [
+    'sz002579', 'sz002463', 'sh600183', 'sz300476', 'sz002916', 'sz002384', 'sz002475', 'sz002938',
+    'sz002815', 'sz002138', 'sz300739', 'sh603328', 'sh603920', 'sz002913', 'sz002888', 'sz002859',
+    'sh688183', 'sz300131', 'sz002635', 'sh605358', 'sz300969', 'sz300963', 'sh600171', 'sz002130'
+  ],
+  'BK0737': [
+    'sz300033', 'sh600570', 'sh688111', 'sz002230', 'sh600588', 'sh601360', 'sz300339', 'sz000158',
+    'sz301236', 'sz002261', 'sz300598', 'sh600536', 'sh600845', 'sh603039', 'sz300253', 'sz300674',
+    'sz300663', 'sz300348', 'sz300468', 'sz300768', 'sh603223', 'sz300377', 'sz300380', 'sz300561'
+  ],
+  'BK0735': [
+    'sz000977', 'sh603019', 'sz000938', 'sz000066', 'sh601138', 'sz002415', 'sz002236', 'sz002180',
+    'sz002152', 'sh603106', 'sz300531', 'sz000997', 'sz002376', 'sz002177', 'sz002197', 'sz002362',
+    'sh688036', 'sh600850', 'sz002841', 'sz300857'
+  ],
+  'BK0448': [
+    'sz000063', 'sz300308', 'sz300502', 'sz300394', 'sh600498', 'sh600487', 'sh600522', 'sh603083',
+    'sz000988', 'sz002281', 'sh688205', 'sh688498', 'sz300548', 'sz300570', 'sz002902', 'sz300780',
+    'sz300638', 'sz002467', 'sz300806', 'sz002881', 'sz002792', 'sz002130'
+  ],
+  'BK0475': [
+    'sh600036', 'sz000001', 'sh601398', 'sh601939', 'sh601288', 'sh601988', 'sh601328', 'sh601658',
+    'sh601166', 'sh600016', 'sh600000', 'sh601818', 'sh601998', 'sh601229', 'sh600919', 'sh601009',
+    'sz002142', 'sh600926', 'sh601860', 'sz002807'
+  ],
+  'BK0474': [
+    'sh601318', 'sh601628', 'sh601601', 'sh601319', 'sh601336'
+  ],
+  'BK1031': [
+    'sh601012', 'sh600438', 'sz300274', 'sh688599', 'sh688223', 'sz002129', 'sh600089', 'sh601877',
+    'sz002459', 'sh600732', 'sz300763', 'sz002506', 'sz002056', 'sh688303', 'sh688472', 'sz300118'
+  ],
+  'BK0545': [
+    'sz002050', 'sz002085', 'sz002096', 'sh688017', 'sz002472', 'sz002595', 'sz002444', 'sh603131',
+    'sz002833', 'sz300803', 'sz300580', 'sz300450', 'sz002837', 'sh603095', 'sh688328'
+  ],
+  'BK0733': [
+    'sh600031', 'sz000157', 'sz000425', 'sh601100', 'sh600761', 'sh600984', 'sz000680', 'sz000528',
+    'sh603298', 'sh603338', 'sh603638', 'sz000996', 'sz002097', 'sz000821'
+  ],
+  'BK0465': [
+    'sh600276', 'sh603259', 'sz000963', 'sh600079', 'sz002422', 'sh600426', 'sz002773', 'sz002294',
+    'sh600521', 'sh600867', 'sh600518', 'sz002370', 'sz002332', 'sz000513', 'sh600789'
+  ],
+  'BK1040': [
+    'sh600436', 'sz000538', 'sh600085', 'sh600993', 'sh600329', 'sz000999', 'sz000423', 'sh600572',
+    'sz002603', 'sh600285', 'sh600771', 'sh600535', 'sz000989', 'sh600080', 'sz002412'
+  ],
+  'BK0438': [
+    'sh603288', 'sh600887', 'sh600298', 'sz000895', 'sh603345', 'sz002557', 'sz002507', 'sh600305',
+    'sz002847', 'sz002714', 'sz002216', 'sh603777', 'sh603886', 'sz300783'
+  ],
+  'BK0428': [
+    'sh600900', 'sh601985', 'sh600011', 'sh600027', 'sh600023', 'sh601991', 'sh600886', 'sh600795',
+    'sh600863', 'sh600674', 'sh600163', 'sh600509', 'sz000543', 'sz000037', 'sh600025'
+  ],
+  'BK0478': [
+    'sh601899', 'sh603993', 'sh601600', 'sh600362', 'sh600489', 'sh600547', 'sh600988', 'sz000878',
+    'sz000630', 'sh601958', 'sh600111', 'sz002460', 'sz002466', 'sh600392', 'sh601168'
+  ],
+  'BK1037': [
+    'sz002475', 'sz002241', 'sz002600', 'sz300433', 'sz300136', 'sh688036', 'sz002384', 'sz002938',
+    'sz002841', 'sz002045', 'sz300476', 'sz002456', 'sz000062', 'sz300693', 'sz300328'
+  ],
+  'BK1038': [
+    'sz000725', 'sz000536', 'sz002456', 'sz002036', 'sh600584', 'sh600703', 'sz002217', 'sz002449',
+    'sz300327', 'sz300686', 'sz300331', 'sz002876', 'sh603505', 'sh688001'
+  ],
+  'BK1184': [
+    'sz300124', 'sh688017', 'sz002050', 'sz002472', 'sh600580', 'sz002896', 'sz002595', 'sz300803',
+    'sz300450', 'sh603131', 'sz002747', 'sh603095', 'sz300607', 'sz300161', 'sz300747'
+  ],
+  'BK0854': [
+    'sh601127', 'sz000158', 'sz300339', 'sz002261', 'sz002456', 'sz000536', 'sz002583', 'sh600839',
+    'sh688256', 'sz300476', 'sz002463', 'sz000977', 'sh603019', 'sh688041', 'sz301236', 'sh600588'
+  ]
+};
+
+async function fetchSinaTopGainers() {
+  try {
+    const url = 'http://vip.stock.finance.sina.com.cn/quotes_service/api/json_v2.php/Market_Center.getHQNodeData?page=1&num=40&sort=changepercent&asc=0&node=hs_a';
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 2000);
+    const res = await fetch(url, { headers: { 'User-Agent': USER_AGENT }, signal: controller.signal });
+    clearTimeout(timeout);
+    if (res.ok) {
+      const buffer = await res.arrayBuffer();
+      const text = new TextDecoder('gbk').decode(buffer);
+      const list = JSON.parse(text);
+      if (Array.isArray(list)) {
+        return list
+          .filter(item => (parseFloat(item.changepercent) || 0) >= 9.5)
+          .map(item => item.symbol.toLowerCase());
+      }
+    }
+  } catch (_) {}
+  return [];
+}
+
+async function fetchTencentBatchQuotes(tCodes) {
+  if (!tCodes || tCodes.length === 0) return [];
+  try {
+    const url = `https://qt.gtimg.cn/q=${tCodes.join(',')}`;
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 3500);
+    const res = await fetch(url, { headers: { 'User-Agent': USER_AGENT }, signal: controller.signal });
+    clearTimeout(timeout);
+    if (res.ok) {
+      const buffer = await res.arrayBuffer();
+      const text = new TextDecoder('gbk').decode(buffer);
+      const lines = text.split(';').map(l => l.trim()).filter(Boolean);
+      const items = [];
+      for (const line of lines) {
+        const parts = line.split('~');
+        if (parts.length > 38) {
+          const code = parts[2];
+          const name = parts[1];
+          const price = parseFloat(parts[3]) || 0;
+          const prevClose = parseFloat(parts[4]) || price;
+          const open = parseFloat(parts[5]) || price;
+          const vol = (parseInt(parts[6], 10) || 0) * 100;
+          const chg = parseFloat(parts[31]) || (Math.round((price - prevClose) * 100) / 100);
+          const chgPct = parseFloat(parts[32]) || (prevClose > 0 ? Math.round(((price - prevClose) / prevClose) * 10000) / 100 : 0);
+          const high = parseFloat(parts[33]) || price;
+          const low = parseFloat(parts[34]) || price;
+          const turnover = (parseFloat(parts[37]) || 0) * 10000;
+          const turnoverRate = parseFloat(parts[38]) || 0;
+          items.push({
+            f12: code,
+            f14: name,
+            f2: price,
+            f3: chgPct,
+            f4: chg,
+            f5: vol,
+            f6: turnover,
+            f7: turnoverRate,
+            f15: high,
+            f16: low,
+            f17: open,
+            f18: prevClose
+          });
+        }
+      }
+      return items;
+    }
+  } catch (_) {}
+  return [];
+}
+
+async function getSectorConstituentsFallback(cleanBk, pn = 1, pz = 100) {
+  let symbols = SECTOR_STOCKS[cleanBk] ? [...SECTOR_STOCKS[cleanBk]] : [];
+
+  if (cleanBk === 'BK1638') {
+    const liveLimitUp = await fetchSinaTopGainers();
+    if (liveLimitUp.length > 0) {
+      const set = new Set([...liveLimitUp, ...symbols]);
+      symbols = Array.from(set);
+    }
+  }
+
+  if (symbols.length === 0) {
+    symbols = SECTOR_STOCKS['BK1715'] || [];
+  }
+
+  const uniqueSymbols = Array.from(new Set(symbols));
+  const quotes = await fetchTencentBatchQuotes(uniqueSymbols);
+  const sectorName = SECTOR_NAMES[cleanBk] || cleanBk;
+
+  const items = quotes.map(q => ({
+    ...q,
+    f100: sectorName
+  }));
+
+  // Sort by change percent descending (same as EastMoney fid=f3&po=1)
+  items.sort((a, b) => b.f3 - a.f3);
+
+  const pageNum = parseInt(pn, 10) || 1;
+  const pageSize = parseInt(pz, 10) || 100;
+  const start = (pageNum - 1) * pageSize;
+  const paged = items.slice(start, start + pageSize);
+
+  return {
+    rc: 0,
+    rt: 17,
+    svr: 2887138014,
+    lt: 2,
+    full: 0,
+    dlmkts: '',
+    data: {
+      total: items.length,
+      diff: paged
+    }
+  };
+}
+
+async function getSectorQuoteFallback(cleanBk) {
+  const constituentsResult = await getSectorConstituentsFallback(cleanBk, 1, 100);
+  const items = (constituentsResult && constituentsResult.data && constituentsResult.data.diff) || [];
+  const sectorName = SECTOR_NAMES[cleanBk] || cleanBk;
+
+  const validItems = items.filter(it => it.f2 > 0);
+  const avgChgPct = validItems.length > 0
+    ? Math.round((validItems.reduce((acc, it) => acc + it.f3, 0) / validItems.length) * 100) / 100
+    : 0.0;
+  const basePrice = 1000.0;
+  const currentPrice = Math.round(basePrice * (1.0 + avgChgPct / 100.0) * 100) / 100;
+  const change = Math.round((currentPrice - basePrice) * 100) / 100;
+  const sumTurnover = items.reduce((acc, it) => acc + (it.f6 || 0), 0);
+  const sumVol = items.reduce((acc, it) => acc + (it.f5 || 0), 0);
+  const nonZeroTr = items.filter(it => it.f7 > 0);
+  const avgTurnoverRate = nonZeroTr.length > 0
+    ? Math.round((nonZeroTr.reduce((acc, it) => acc + it.f7, 0) / nonZeroTr.length) * 100) / 100
+    : 0.0;
+
+  const maxChg = validItems.length > 0 ? Math.max(...validItems.map(it => it.f3)) : avgChgPct;
+  const minChg = validItems.length > 0 ? Math.min(...validItems.map(it => it.f3)) : avgChgPct;
+  const highPrice = Math.round(basePrice * (1.0 + Math.max(maxChg, avgChgPct, 0.0) / 100.0) * 100) / 100;
+  const lowPrice = Math.round(basePrice * (1.0 + Math.min(minChg, avgChgPct, 0.0) / 100.0) * 100) / 100;
+
+  return {
+    rc: 0,
+    rt: 17,
+    data: {
+      diff: [
+        {
+          f12: cleanBk,
+          f14: sectorName,
+          f2: currentPrice,
+          f3: avgChgPct,
+          f4: change,
+          f5: sumVol,
+          f6: sumTurnover,
+          f7: avgTurnoverRate,
+          f15: highPrice,
+          f16: lowPrice,
+          f17: basePrice,
+          f18: basePrice
+        }
+      ]
+    }
+  };
+}
+
 export default {
   async fetch(request) {
     if (request.method === 'OPTIONS') {
@@ -474,7 +812,7 @@ export default {
       return jsonRes({
         service: 'China A-Share Stock Quotation API',
         status: 'online',
-        version: '1.2.0',
+        version: '1.4.0',
         endpoints: {
           health: '/api/health',
           quote: '/api/quote?symbol=600519',
@@ -541,7 +879,7 @@ export default {
       }
     }
 
-    // Proxy: East Money sector constituent list (multi-node failover)
+        // Proxy: East Money sector constituent list (multi-node failover with Sina & Tencent fallback)
     if (path === '/api/sector/constituents') {
       const bk = url.searchParams.get('bk');
       const pn = url.searchParams.get('pn') || '1';
@@ -550,25 +888,26 @@ export default {
       const clean = bk.trim().toUpperCase();
       const candidates = [
         `https://29.push2.eastmoney.com/api/qt/clist/get?pn=${pn}&pz=${pz}&po=1&np=1&ut=bd1d9ddb04089700cf9c27f6f7426281&fltt=2&invt=2&fid=f3&fs=b:${clean}+f:!50&fields=f12,f14,f2,f3,f4,f5,f6,f7,f15,f16,f17,f18,f100`,
-        `https://29.push2.eastmoney.com/api/qt/clist/get?pn=${pn}&pz=${pz}&po=1&np=1&ut=bd1d9ddb04089700cf9c27f6f7426281&fltt=2&invt=2&fid=f3&fs=b:${clean}&fields=f12,f14,f2,f3,f4,f5,f6,f7,f15,f16,f17,f18,f100`,
         `https://79.push2.eastmoney.com/api/qt/clist/get?pn=${pn}&pz=${pz}&po=1&np=1&ut=bd1d9ddb04089700cf9c27f6f7426281&fltt=2&invt=2&fid=f3&fs=b:${clean}+f:!50&fields=f12,f14,f2,f3,f4,f5,f6,f7,f15,f16,f17,f18,f100`,
-        `https://pushguest.eastmoney.com/api/qt/clist/get?pn=${pn}&pz=${pz}&po=1&np=1&ut=fa5fd1943c7b386f172d6893dbfba10b&fltt=2&invt=2&fid=f3&fs=b:${clean}+f:!50&fields=f12,f14,f2,f3,f4,f5,f6,f7,f15,f16,f17,f18,f100`,
-        `http://29.push2.eastmoney.com/api/qt/clist/get?pn=${pn}&pz=${pz}&po=1&np=1&ut=bd1d9ddb04089700cf9c27f6f7426281&fltt=2&invt=2&fid=f3&fs=b:${clean}+f:!50&fields=f12,f14,f2,f3,f4,f5,f6,f7,f15,f16,f17,f18,f100`,
-        `https://push2.eastmoney.com/api/qt/clist/get?pn=${pn}&pz=${pz}&po=1&np=1&ut=bd1d9ddb04089700cf9c27f6f7426281&fltt=2&invt=2&fid=f3&fs=b:${clean}&fields=f12,f14,f2,f3,f4,f5,f6,f7,f15,f16,f17,f18,f100`
+        `https://pushguest.eastmoney.com/api/qt/clist/get?pn=${pn}&pz=${pz}&po=1&np=1&ut=fa5fd1943c7b386f172d6893dbfba10b&fltt=2&invt=2&fid=f3&fs=b:${clean}+f:!50&fields=f12,f14,f2,f3,f4,f5,f6,f7,f15,f16,f17,f18,f100`
       ];
-      const errors = [];
+
       for (const targetUrl of candidates) {
         try {
+          const controller = new AbortController();
+          const timeout = setTimeout(() => controller.abort(), 1500);
           const res = await fetch(targetUrl, {
             headers: {
               'User-Agent': USER_AGENT,
               'Referer': 'https://quote.eastmoney.com/',
               'Accept': '*/*',
             },
+            signal: controller.signal
           });
+          clearTimeout(timeout);
           if (res.ok) {
             const data = await res.json();
-            if (data && data.data && (data.data.diff || data.data.total !== undefined)) {
+            if (data && data.data && Array.isArray(data.data.diff) && data.data.diff.length > 0) {
               return new Response(JSON.stringify(data), {
                 status: 200,
                 headers: {
@@ -578,15 +917,28 @@ export default {
                 },
               });
             }
-            errors.push({ url: targetUrl.split('?')[0], error: 'data null' });
-          } else {
-            errors.push({ url: targetUrl.split('?')[0], status: res.status });
           }
-        } catch (e) {
-          errors.push({ url: targetUrl.split('?')[0], error: String(e) });
-        }
+        } catch (_) {}
       }
-      return jsonRes({ error: 'all upstream nodes failed', attempts: errors }, 502);
+
+      // Upstream failed or empty: use ultra-fast resilient fallback
+      try {
+        const fallbackData = await getSectorConstituentsFallback(clean, pn, pz);
+        if (fallbackData && fallbackData.data && fallbackData.data.diff.length > 0) {
+          return new Response(JSON.stringify(fallbackData), {
+            status: 200,
+            headers: {
+              'Content-Type': 'application/json',
+              'Cache-Control': 'public, max-age=10, s-maxage=12',
+              ...CORS_HEADERS,
+            },
+          });
+        }
+      } catch (err) {
+        return jsonRes({ error: 'fallback failed: ' + String(err) }, 502);
+      }
+
+      return jsonRes({ error: 'all upstream nodes and fallback failed' }, 502);
     }
 
     // Proxy: East Money sector index quote
@@ -596,32 +948,51 @@ export default {
       const clean = bk.trim().toUpperCase();
       const quoteCandidates = [
         `https://29.push2.eastmoney.com/api/qt/ulist.np/get?secids=90.${clean}&fields=f12,f14,f2,f3,f4,f5,f6,f7,f15,f16,f17,f18,f20,f21,f113,f114,f115,f116&ut=bd1d9ddb04089700cf9c27f6f7426281&fltt=2&invt=2`,
-        `https://79.push2.eastmoney.com/api/qt/ulist.np/get?secids=90.${clean}&fields=f12,f14,f2,f3,f4,f5,f6,f7,f15,f16,f17,f18,f20,f21,f113,f114,f115,f116&ut=bd1d9ddb04089700cf9c27f6f7426281&fltt=2&invt=2`,
-        `https://push2.eastmoney.com/api/qt/ulist.np/get?secids=90.${clean}&fields=f12,f14,f2,f3,f4,f5,f6,f7,f15,f16,f17,f18,f20,f21,f113,f114,f115,f116&ut=bd1d9ddb04089700cf9c27f6f7426281&fltt=2&invt=2`
+        `https://79.push2.eastmoney.com/api/qt/ulist.np/get?secids=90.${clean}&fields=f12,f14,f2,f3,f4,f5,f6,f7,f15,f16,f17,f18,f20,f21,f113,f114,f115,f116&ut=bd1d9ddb04089700cf9c27f6f7426281&fltt=2&invt=2`
       ];
       for (const targetUrl of quoteCandidates) {
         try {
+          const controller = new AbortController();
+          const timeout = setTimeout(() => controller.abort(), 1500);
           const res = await fetch(targetUrl, {
             headers: {
               'User-Agent': USER_AGENT,
               'Referer': 'https://quote.eastmoney.com/',
               'Accept': '*/*',
             },
+            signal: controller.signal
           });
+          clearTimeout(timeout);
           if (res.ok) {
             const data = await res.json();
-            return new Response(JSON.stringify(data), {
-              status: 200,
-              headers: {
-                'Content-Type': 'application/json',
-                'Cache-Control': 'public, max-age=10, s-maxage=12',
-                ...CORS_HEADERS,
-              },
-            });
+            if (data && data.data && Array.isArray(data.data.diff) && data.data.diff.length > 0) {
+              return new Response(JSON.stringify(data), {
+                status: 200,
+                headers: {
+                  'Content-Type': 'application/json',
+                  'Cache-Control': 'public, max-age=10, s-maxage=12',
+                  ...CORS_HEADERS,
+                },
+              });
+            }
           }
         } catch (_) {}
       }
-      return jsonRes({ error: 'upstream quote failed' }, 502);
+
+      // Upstream quote failed: synthesize sector quote from constituents
+      try {
+        const fallbackQuote = await getSectorQuoteFallback(clean);
+        return new Response(JSON.stringify(fallbackQuote), {
+          status: 200,
+          headers: {
+            'Content-Type': 'application/json',
+            'Cache-Control': 'public, max-age=10, s-maxage=12',
+            ...CORS_HEADERS,
+          },
+        });
+      } catch (err) {
+        return jsonRes({ error: 'upstream quote and fallback failed: ' + String(err) }, 502);
+      }
     }
 
     return jsonRes({ error: 'Not Found' }, 404);

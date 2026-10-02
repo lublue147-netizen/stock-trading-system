@@ -45,7 +45,14 @@ class WatchlistPreferences(context: Context) {
         val DEFAULT_SECTOR_SYMBOLS = listOf(
             "BK1638", // 最近多板
             "BK1050", // 昨日涨停-含一字
-            "BK1715"  // 趋势股
+            "BK1715", // 趋势股
+            "BK1675", // 历史新高
+            "BK1036", // 半导体
+            "BK0473", // 证券
+            "BK0896", // 白酒
+            "BK1033", // 电池
+            "BK1029", // 汽车整车
+            "BK1166"  // 低空经济
         )
 
         fun isValidSymbol(symbol: String): Boolean {
