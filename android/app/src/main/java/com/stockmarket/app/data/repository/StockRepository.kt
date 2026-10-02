@@ -57,7 +57,7 @@ class StockRepository(
             high = maxOf(p, prevClose),
             low = minOf(p, prevClose),
             previousClose = prevClose,
-            volume = if (item.turnoverAmount != null && item.turnoverAmount > 0.0) item.turnoverAmount / maxOf(p, 1.0) else 1000000.0,
+            volume = (if (item.turnoverAmount != null && item.turnoverAmount > 0.0) item.turnoverAmount / maxOf(p, 1.0) else 1000000.0).toLong(),
             turnoverAmount = item.turnoverAmount,
             turnoverRate = item.turnoverRate,
             industry = item.industry,
@@ -439,7 +439,7 @@ class StockRepository(
                                 range = "1d",
                                 interval = "5m",
                                 candles = candles,
-                                meta = HistoricalMeta(
+                                meta = HistoryMeta(
                                     currency = "CNY",
                                     previousClose = pc,
                                     high = candles.maxOfOrNull { it.high } ?: pc,
