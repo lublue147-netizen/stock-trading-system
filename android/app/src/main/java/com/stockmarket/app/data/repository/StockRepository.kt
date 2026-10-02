@@ -1,5 +1,6 @@
 package com.stockmarket.app.data.repository
 
+import com.google.firebase.crashlytics.FirebaseCrashlytics
 import com.stockmarket.app.data.local.WatchlistPreferences
 import com.stockmarket.app.data.model.*
 import com.stockmarket.app.data.remote.ApiClient
@@ -208,9 +209,10 @@ class StockRepository(
                     .url(url)
                     .header("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64)")
                     .header("Referer", "https://quote.eastmoney.com/")
+                    .header("Connection", "close")
                     .build()
 
-                val response = ApiClient.ultraFastOkHttpClient.newCall(request).execute()
+                val response = ApiClient.eastMoneyOkHttpClient.newCall(request).execute()
                 if (!response.isSuccessful) {
                     response.close()
                     continue
@@ -315,9 +317,10 @@ class StockRepository(
                     .url(url)
                     .header("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64)")
                     .header("Referer", "https://quote.eastmoney.com/")
+                    .header("Connection", "close")
                     .build()
 
-                val response = ApiClient.ultraFastOkHttpClient.newCall(request).execute()
+                val response = ApiClient.eastMoneyOkHttpClient.newCall(request).execute()
                 if (!response.isSuccessful) {
                     response.close()
                     continue
@@ -421,9 +424,10 @@ class StockRepository(
                     .url(url)
                     .header("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64)")
                     .header("Referer", "https://quote.eastmoney.com/")
+                    .header("Connection", "close")
                     .build()
 
-                val response = ApiClient.ultraFastOkHttpClient.newCall(request).execute()
+                val response = ApiClient.eastMoneyOkHttpClient.newCall(request).execute()
                 if (!response.isSuccessful) {
                     response.close()
                     continue
@@ -607,6 +611,31 @@ class StockRepository(
                     results.add(q)
                     continue
                 }
+            } else if (clean in listOf("BK1715", "1715")) {
+                val pool = fetchDirectEastMoneyTopicQSPool(page = 1, pageSize = 80)
+                if (pool.isNotEmpty()) {
+                    val avgChg = round(pool.map { it.changePercent }.average() * 100) / 100.0
+                    val sumTurnover = pool.sumOf { it.turnoverAmount }
+                    val nonZeroTr = pool.filter { it.turnoverRate > 0.0 }
+                    val avgTr = if (nonZeroTr.isNotEmpty()) round(nonZeroTr.map { it.turnoverRate }.average() * 100) / 100.0 else 0.0
+                    val q = StockQuote(
+                        symbol = clean,
+                        name = "趋势股",
+                        price = round(1000.0 * (1.0 + avgChg / 100.0) * 100) / 100.0,
+                        change = round(1000.0 * (avgChg / 100.0) * 100) / 100.0,
+                        changePercent = avgChg,
+                        currency = "点",
+                        exchange = "板块",
+                        open = 1000.0,
+                        high = round(1000.0 * (1.0 + maxOf(avgChg, 0.0) / 100.0) * 100) / 100.0,
+                        low = round(1000.0 * (1.0 + minOf(avgChg, 0.0) / 100.0) * 100) / 100.0,
+                        previousClose = 1000.0,
+                        turnoverAmount = sumTurnover,
+                        turnoverRate = avgTr
+                    )
+                    results.add(q)
+                    continue
+                }
             }
             remainingCodes.add(clean)
         }
@@ -636,9 +665,10 @@ class StockRepository(
                     .url(url)
                     .header("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64)")
                     .header("Referer", "https://quote.eastmoney.com/")
+                    .header("Connection", "close")
                     .build()
 
-                val response = ApiClient.ultraFastOkHttpClient.newCall(request).execute()
+                val response = ApiClient.eastMoneyOkHttpClient.newCall(request).execute()
                 if (!response.isSuccessful) {
                     response.close()
                     continue
@@ -1462,6 +1492,14 @@ class StockRepository(
                         continue
                     }
                 }
+                if (type == ThematicSectorType.TREND_STOCKS) {
+                    val pool = fetchDirectEastMoneyTopicQSPool(page = 1, pageSize = 35)
+                    if (pool.isNotEmpty()) {
+                        resultMap[type]?.addAll(pool)
+                        anyLoaded = true
+                        continue
+                    }
+                }
                 val items = fetchEastMoneySectorConstituents(type.bkCode, limit = 35)
                 if (items.isNotEmpty()) {
                     resultMap[type]?.addAll(items)
@@ -1642,9 +1680,10 @@ class StockRepository(
                 .url(url)
                 .header("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64)")
                 .header("Referer", "https://quote.eastmoney.com/")
+                .header("Connection", "close")
                 .build()
 
-            val response = ApiClient.ultraFastOkHttpClient.newCall(request).execute()
+            val response = ApiClient.eastMoneyOkHttpClient.newCall(request).execute()
             if (!response.isSuccessful) {
                 response.close()
                 return null
@@ -1823,41 +1862,29 @@ class StockRepository(
             }
         }
 
+        // Native fast path for BK1715 / 1715 (趋势股 / 强势股): Official EastMoney push2ex QSPool
+        if (clean in listOf("BK1715", "1715")) {
+            val qsPool = fetchDirectEastMoneyTopicQSPool(page = page, pageSize = pageSize)
+            if (qsPool.isNotEmpty()) {
+                return SectorConstituentsPageResult(qsPool, maxOf(199, qsPool.size), null)
+            }
+        }
+
         val candidateAttempts = listOf(
-            // 1. Primary official web configuration: push2 with official web UT token and b:<clean>+f:!50
-            Triple("push2.eastmoney.com", "b:$clean+f:!50", "fa5fd1943c7b386f172d6893dbfba10b"),
-            // 2. Unfiltered board query: push2 with official web UT token and b:<clean>
             Triple("push2.eastmoney.com", "b:$clean", "fa5fd1943c7b386f172d6893dbfba10b"),
-            // 3. Fallback host 29.push2 with b:<clean>+f:!50
-            Triple("29.push2.eastmoney.com", "b:$clean+f:!50", "fa5fd1943c7b386f172d6893dbfba10b"),
-            // 4. Fallback host 29.push2 with b:<clean>
-            Triple("29.push2.eastmoney.com", "b:$clean", "fa5fd1943c7b386f172d6893dbfba10b"),
-            // 5. Fallback host 79.push2 with b:<clean>+f:!50
-            Triple("79.push2.eastmoney.com", "b:$clean+f:!50", "fa5fd1943c7b386f172d6893dbfba10b"),
-            // 6. Mobile UT token fallback on push2
-            Triple("push2.eastmoney.com", "b:$clean+f:!50", "bd1d9ddb04089700cf9c27f6f7426281"),
-            // 7. Mobile UT token fallback on 29.push2
-            Triple("29.push2.eastmoney.com", "b:$clean+f:!50", "bd1d9ddb04089700cf9c27f6f7426281")
+            Triple("push2.eastmoney.com", "b:$clean+f:!50", "fa5fd1943c7b386f172d6893dbfba10b"),
+            Triple("29.push2.eastmoney.com", "b:$clean", "bd1d9ddb04089700cf9c27f6f7426281"),
+            Triple("29.push2.eastmoney.com", "b:$clean+f:!50", "bd1d9ddb04089700cf9c27f6f7426281"),
+            Triple("82.push2.eastmoney.com", "b:$clean", "bd1d9ddb04089700cf9c27f6f7426281"),
+            Triple("79.push2.eastmoney.com", "b:$clean", "fa5fd1943c7b386f172d6893dbfba10b"),
+            Triple("1.push2.eastmoney.com", "b:$clean", "bd1d9ddb04089700cf9c27f6f7426281")
         )
 
-        val candidateUrls = candidateAttempts.map { (host, fsVal, utVal) ->
-            HttpUrl.Builder()
-                .scheme("https")
-                .host(host)
-                .addPathSegments("api/qt/clist/get")
-                .addQueryParameter("pn", page.toString())
-                .addQueryParameter("pz", pageSize.toString())
-                .addQueryParameter("po", "1")
-                .addQueryParameter("np", "1")
-                .addQueryParameter("ut", utVal)
-                .addQueryParameter("fltt", "2")
-                .addQueryParameter("invt", "2")
-                .addQueryParameter("fid", "f3")
-                .addQueryParameter("fs", fsVal)
-                .addQueryParameter("dect", "1")
-                .addQueryParameter("fields", "f12,f14,f2,f3,f4,f5,f6,f7,f15,f16,f17,f18,f100")
-                .build()
-                .toString()
+        val candidateUrls = candidateAttempts.flatMap { (host, fsVal, utVal) ->
+            listOf(
+                "https://$host/api/qt/clist/get?pn=$page&pz=$pageSize&po=1&np=1&ut=$utVal&fltt=2&invt=2&fid=f3&fs=$fsVal&dect=1&fields=f12,f14,f2,f3,f4,f5,f6,f7,f15,f16,f17,f18,f100",
+                "http://$host/api/qt/clist/get?pn=$page&pz=$pageSize&po=1&np=1&ut=$utVal&fltt=2&invt=2&fid=f3&fs=$fsVal&dect=1&fields=f12,f14,f2,f3,f4,f5,f6,f7,f15,f16,f17,f18,f100"
+            )
         }
 
         val diagnosticAttempts = mutableListOf<String>()
@@ -1869,9 +1896,10 @@ class StockRepository(
                     .header("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
                     .header("Referer", "https://quote.eastmoney.com/center/gridlist.html")
                     .header("Accept", "*/*")
+                    .header("Connection", "close")
                     .build()
 
-                val response = ApiClient.fastOkHttpClient.newCall(request).execute()
+                val response = ApiClient.eastMoneyOkHttpClient.newCall(request).execute()
                 if (!response.isSuccessful) {
                     val code = response.code
                     response.close()
@@ -1992,6 +2020,13 @@ class StockRepository(
                 val errName = e.javaClass.simpleName
                 diagnosticAttempts.add("$hostTag $errName: ${e.message ?: "error"}")
                 android.util.Log.w("SectorFetch", "[$clean] attempt failed ($url): ${e.message}")
+                try {
+                    FirebaseCrashlytics.getInstance().apply {
+                        setCustomKey("bkCode", clean)
+                        setCustomKey("hostTag", hostTag)
+                        log("Sector constituent attempt failed: $url - ${e.message}")
+                    }
+                } catch (_: Exception) {}
             }
         }
 
@@ -2043,6 +2078,14 @@ class StockRepository(
 
         val diagInfo = diagnosticAttempts.joinToString("; ")
         android.util.Log.w("SectorFetch", "[$clean] all candidates failed: $diagInfo")
+        try {
+            FirebaseCrashlytics.getInstance().apply {
+                setCustomKey("bkCode", clean)
+                setCustomKey("total_attempts", candidateUrls.size)
+                log("All sector constituent candidates failed for $clean: $diagInfo")
+                recordException(java.io.IOException("Sector constituents failed ($clean): $diagInfo"))
+            }
+        } catch (_: Exception) {}
         return SectorConstituentsPageResult(emptyList(), 0, diagInfo)
     }
 
@@ -2057,6 +2100,10 @@ class StockRepository(
             return SectorConstituentsFullResult(page1.items, page1.total, page1.diagnosticInfo)
         }
         if (clean in listOf("BK1638", "BK0816", "1638", "0816")) {
+            val page1 = fetchEastMoneySectorConstituentsPage(clean, page = 1, pageSize = 200)
+            return SectorConstituentsFullResult(page1.items, page1.total, page1.diagnosticInfo)
+        }
+        if (clean in listOf("BK1715", "1715")) {
             val page1 = fetchEastMoneySectorConstituentsPage(clean, page = 1, pageSize = 200)
             return SectorConstituentsFullResult(page1.items, page1.total, page1.diagnosticInfo)
         }

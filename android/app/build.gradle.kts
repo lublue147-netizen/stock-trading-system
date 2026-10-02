@@ -1,6 +1,8 @@
 plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.android")
+    id("com.google.gms.google-services")
+    id("com.google.firebase.crashlytics")
 }
 
 android {
@@ -11,8 +13,8 @@ android {
         applicationId = "com.stockmarket.app"
         minSdk = 24
         targetSdk = 34
-        versionCode = 29
-        versionName = "1.2.8"
+        versionCode = 30
+        versionName = "1.2.9"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         vectorDrawables {
@@ -107,6 +109,11 @@ dependencies {
 
     // DataStore Preferences for Watchlist & Settings
     implementation("androidx.datastore:datastore-preferences:1.0.0")
+
+    // Firebase (BoM, Crashlytics & Analytics)
+    implementation(platform("com.google.firebase:firebase-bom:33.7.0"))
+    implementation("com.google.firebase:firebase-crashlytics")
+    implementation("com.google.firebase:firebase-analytics")
 
     // Tooling & Testing
     debugImplementation("androidx.compose.ui:ui-tooling")

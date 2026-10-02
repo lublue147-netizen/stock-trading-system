@@ -34,6 +34,19 @@ object ApiClient {
         .readTimeout(2500, TimeUnit.MILLISECONDS)
         .build()
 
+    /**
+     * Dedicated OkHttpClient for EastMoney & domestic financial APIs.
+     * Enforces HTTP/1.1 to eliminate buggy HTTP/2 stream multiplexing drops on domestic CDNs/gateways,
+     * and enables aggressive retry on connection failures to prevent "unexpected end of stream".
+     */
+    val eastMoneyOkHttpClient = OkHttpClient.Builder()
+        .protocols(listOf(okhttp3.Protocol.HTTP_1_1))
+        .retryOnConnectionFailure(true)
+        .connectTimeout(4000, TimeUnit.MILLISECONDS)
+        .readTimeout(8000, TimeUnit.MILLISECONDS)
+        .connectionPool(okhttp3.ConnectionPool(4, 15, TimeUnit.SECONDS))
+        .build()
+
     private var currentBaseUrl: String = DEFAULT_BASE_URL
     private var cachedService: StockApiService? = null
 

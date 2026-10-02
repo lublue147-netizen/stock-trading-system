@@ -1,0 +1,67 @@
+{
+  "project_info": {
+    "project_number": "1041177100158",
+    "project_id": "test-8b509",
+    "storage_bucket": "test-8b509.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:1041177100158:android:48d4df913de131d519bd2f",
+        "android_client_info": {
+          "package_name": "com.lublue.android.tv"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyCP0QDG5D2sM1v8FPWKUsg2Cq111uL1Kts"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    },
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:1041177100158:android:9b6b5bfe7b840d6419bd2f",
+        "android_client_info": {
+          "package_name": "com.stockmarket.app"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyCP0QDG5D2sM1v8FPWKUsg2Cq111uL1Kts"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    },
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:1041177100158:android:d8f6b8956a5920ad19bd2f",
+        "android_client_info": {
+          "package_name": "com.stockmarket.app.debug"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyCP0QDG5D2sM1v8FPWKUsg2Cq111uL1Kts"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
