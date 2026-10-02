@@ -350,39 +350,6 @@ object StockIndustryRegistry {
     }
 
     private val SECTOR_STOCKS_MAPPING: Map<String, List<String>> = mapOf(
-        "BK1638" to listOf(
-            "600825.SS", "000678.SZ", "000011.SZ", "002242.SZ", "301190.SZ", "600241.SS", "002058.SZ", "002866.SZ",
-            "603188.SS", "603200.SS", "605303.SS", "605388.SS", "000504.SZ", "000692.SZ", "000710.SZ", "688185.SS",
-            "000536.SZ", "002583.SZ", "603268.SS", "603106.SS", "002094.SZ", "600292.SS", "000958.SZ", "603656.SS",
-            "001696.SZ", "000062.SZ", "600611.SS", "300085.SZ", "000158.SZ", "300339.SZ", "002261.SZ", "002456.SZ"
-        ),
-        "BK0816" to listOf(
-            "600825.SS", "000678.SZ", "000011.SZ", "002242.SZ", "301190.SZ", "600241.SS", "002058.SZ", "002866.SZ",
-            "603188.SS", "603200.SS", "605303.SS", "605388.SS", "000504.SZ", "000692.SZ", "000710.SZ", "688185.SS"
-        ),
-        "BK1050" to listOf(
-            "301190.SZ", "301560.SZ", "002242.SZ", "002866.SZ", "002058.SZ", "605303.SS", "603200.SS", "600825.SS",
-            "000678.SZ", "603188.SS", "000011.SZ", "605388.SS", "600241.SS", "301513.SZ", "002244.SZ", "600657.SS",
-            "000002.SZ", "601238.SS", "601811.SS", "688685.SS", "300085.SZ", "000158.SZ", "300339.SZ", "002261.SZ"
-        ),
-        "BK0815" to listOf(
-            "301190.SZ", "301560.SZ", "002242.SZ", "002866.SZ", "002058.SZ", "605303.SS", "603200.SS", "600825.SS",
-            "000678.SZ", "603188.SS", "000011.SZ", "605388.SS", "600241.SS", "301513.SZ", "002244.SZ", "600657.SS"
-        ),
-        "BK1715" to listOf(
-            "300750.SZ", "002594.SZ", "601127.SS", "300308.SZ", "300502.SZ", "601138.SS", "002463.SZ", "300476.SZ",
-            "688256.SS", "000977.SZ", "603019.SS", "300124.SZ", "002371.SZ", "688012.SS", "688981.SS", "688041.SS",
-            "688008.SS", "002049.SZ", "603986.SS", "603501.SS", "300274.SZ", "300014.SZ", "601689.SZ", "002050.SZ",
-            "000625.SZ", "601633.SS", "002475.SZ", "002241.SZ", "300433.SZ", "000063.SZ", "300394.SZ", "601899.SS",
-            "603993.SS", "601600.SS", "600150.SS"
-        ),
-        "BK1675" to listOf(
-            "688256.SS", "300476.SZ", "002463.SZ", "002130.SZ", "002851.SZ", "300757.SZ", "601138.SS", "300502.SZ",
-            "300308.SZ", "300394.SZ", "001696.SZ", "300339.SZ", "000158.SZ", "301236.SZ", "002261.SZ", "300442.SZ",
-            "688041.SS", "688047.SS", "688008.SS", "688692.SS", "688012.SS", "002371.SZ", "300661.SZ", "688536.SS",
-            "601127.SS", "600418.SS", "002594.SZ", "300750.SZ", "688205.SS", "688498.SS", "688183.SS", "688126.SS",
-            "301269.SZ", "688072.SS", "688037.SS"
-        ),
         "BK1036" to listOf(
             "688981.SS", "002371.SZ", "688012.SS", "688041.SS", "688256.SS", "603501.SS", "688008.SS", "603986.SS",
             "600584.SS", "002049.SZ", "688072.SS", "688396.SS", "002156.SZ", "600460.SS", "300782.SZ", "300661.SZ",
@@ -441,6 +408,10 @@ object StockIndustryRegistry {
 
     fun getSectorStockSymbols(bkCode: String): List<String> {
         val clean = bkCode.trim().uppercase()
+        // Dynamic thematic boards rely exclusively on official live pools/clist queries
+        if (clean in listOf("BK1675", "BK1715", "BK1638", "BK0816", "BK1050", "BK0815")) {
+            return emptyList()
+        }
         SECTOR_STOCKS_MAPPING[clean]?.let { return it }
 
         // Find stocks mapped to this industry in KNOWN_STOCK_INDUSTRIES
@@ -453,6 +424,6 @@ object StockIndustryRegistry {
         }
         if (matched.isNotEmpty()) return matched
 
-        return SECTOR_STOCKS_MAPPING["BK1715"] ?: emptyList()
+        return emptyList()
     }
 }
