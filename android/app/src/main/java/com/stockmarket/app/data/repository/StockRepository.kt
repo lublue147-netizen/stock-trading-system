@@ -601,13 +601,7 @@ class StockRepository(
                 previousClose = 1000.0,
                 volume = (sumTurnover / 20.0).toLong(),
                 turnoverAmount = sumTurnover,
-                turnoverRate = avgTurnoverRate,
-                leadingStockName = leader?.name,
-                leadingStockChangePercent = leader?.changePercent,
-                riseCount = sortedItems.count { it.changePercent > 0.0 },
-                fallCount = sortedItems.count { it.changePercent < 0.0 },
-                flatCount = sortedItems.count { it.changePercent == 0.0 },
-                isIndex = false
+                turnoverRate = avgTurnoverRate
             )
 
             val result = SectorDetailResult(
@@ -616,7 +610,7 @@ class StockRepository(
                 totalCount = sortedItems.size,
                 diagnosticInfo = "新浪VIP实时行情直连 (${sortedItems.size}只)"
             )
-            cacheSectorDetail("BK1638", result)
+            sectorDetailCache["BK1638"] = Pair(System.currentTimeMillis(), result)
             return@withContext Result.success(result)
         }
 
