@@ -27,6 +27,14 @@ class StockRepository(
 
     private fun getService() = ApiClient.getService(preferences.getServerUrl())
 
+    fun isUsableCustomServer(): Boolean {
+        val url = preferences.getServerUrl().trim()
+        if (url.isEmpty()) return false
+        // Cloudflare Workers (*.workers.dev) are blocked/throttled by GFW in Mainland China
+        if (url.contains("workers.dev", ignoreCase = true)) return false
+        return true
+    }
+
     fun getCachedStockQuote(symbol: String): StockQuote? {
         val clean = symbol.trim().uppercase()
         val cached = stockQuoteCache[clean] ?: return null
@@ -193,9 +201,7 @@ class StockRepository(
             if (clean.startsWith("BK")) "90.$clean" else "90.BK$clean"
         }
         val urls = listOf(
-            // 1. Configured Backend / Cloudflare Worker (Fast, online, synthesized fallback)
-            "${preferences.getServerUrl().trimEnd('/')}/api/sector/quote?bk=$firstBk",
-            // 2. Direct East Money primary push2 node (Ultra-fast timeout)
+            "https://push2.eastmoney.com/api/qt/ulist.np/get?secids=$secids&fields=f12,f14,f2,f3,f4,f5,f6,f7,f15,f16,f17,f18&fltt=2&invt=2",
             "https://29.push2.eastmoney.com/api/qt/ulist.np/get?secids=$secids&fields=f12,f14,f2,f3,f4,f5,f6,f7,f15,f16,f17,f18&fltt=2&invt=2"
         )
         for (url in urls) {
@@ -401,16 +407,18 @@ class StockRepository(
             // continue to secondary
         }
 
-        // 2. Secondary Engine: Configured Cloudflare Worker API
-        try {
-            val quote = getService().getQuote(symbol)
-            if (quote.price > 0.0) {
-                val enriched = enrichQuotesWithIndustry(listOf(quote)).firstOrNull() ?: quote
-                cacheStockQuote(enriched)
-                return@withContext Result.success(enriched)
+        // 2. Secondary Engine: Configured Custom Server API (if explicitly configured and not workers.dev)
+        if (isUsableCustomServer()) {
+            try {
+                val quote = getService().getQuote(symbol)
+                if (quote.price > 0.0) {
+                    val enriched = enrichQuotesWithIndustry(listOf(quote)).firstOrNull() ?: quote
+                    cacheStockQuote(enriched)
+                    return@withContext Result.success(enriched)
+                }
+            } catch (e: Exception) {
+                // continue to fallback
             }
-        } catch (e: Exception) {
-            // continue to fallback
         }
 
         // 3. High-Fidelity Fallback
@@ -454,6 +462,32 @@ class StockRepository(
             }
         }
 
+        // 1.5 Special Fast-path for Sectors (BK*) to avoid blocking on stock KLine APIs
+        if (clean.startsWith("BK")) {
+            if (range == "1d" && date == null) {
+                try {
+                    fetchDirectEastMoneyTrends(symbol)?.let { data ->
+                        if (data.candles.isNotEmpty()) {
+                            return@withContext Result.success(data)
+                        }
+                    }
+                } catch (_: Exception) {}
+            }
+            val secQuote = getCachedSectorDetail(clean)?.quote
+            val pc = secQuote?.previousClose ?: 1000.0
+            val cur = secQuote?.price ?: pc
+            val fallbackHistory = createFallbackHistory(symbol, range).copy(
+                meta = HistoryMeta(
+                    currency = "点",
+                    previousClose = pc,
+                    high = secQuote?.high ?: maxOf(pc, cur),
+                    low = secQuote?.low ?: minOf(pc, cur),
+                    selectedDate = null
+                )
+            )
+            return@withContext Result.success(fallbackHistory)
+        }
+
         // 2. Direct Sina Finance KLine & Historical Intraday API (Fast ~0.5s & Highly Reliable)
         try {
             fetchDirectSinaHistory(symbol, range, date)?.let { data ->
@@ -462,7 +496,7 @@ class StockRepository(
                 }
             }
         } catch (e: Exception) {
-            // continue to EastMoney / Worker
+            // continue to EastMoney
         }
 
         // 3. Fast East Money Trends2 (for 09:15-09:25 Call Auction if Sina was unavailable)
@@ -476,13 +510,15 @@ class StockRepository(
             } catch (e: Exception) {}
         }
 
-        // 4. Secondary Engine: Configured Cloudflare Worker API
-        try {
-            val data = getService().getHistory(symbol = symbol, range = range, date = date)
-            if (data.candles.isNotEmpty()) {
-                return@withContext Result.success(data)
-            }
-        } catch (e: Exception) {}
+        // 4. Secondary Engine: Configured Custom Server API (if explicitly configured and not workers.dev)
+        if (isUsableCustomServer()) {
+            try {
+                val data = getService().getHistory(symbol = symbol, range = range, date = date)
+                if (data.candles.isNotEmpty()) {
+                    return@withContext Result.success(data)
+                }
+            } catch (e: Exception) {}
+        }
 
         // 5. Fallback
         Result.success(createFallbackHistory(symbol, range))
@@ -500,6 +536,88 @@ class StockRepository(
         // 1. Instant check for cached data
         getCachedSectorDetail(clean)?.let {
             return@withContext Result.success(it)
+        }
+
+        // Special native client-side fast-path for BK1638 (连板天梯 / 涨停股): 100% domestic Sina VIP pipeline
+        if (clean == "BK1638" || clean == "1638") {
+            val liveGainers = fetchDirectSinaMarketCenterGainers(page = 1, pageSize = 80)
+            val fallbackSymbols = StockIndustryRegistry.getSectorStockSymbols("BK1638")
+            val fallbackQuotes = try { fetchDirectTencentQuotes(fallbackSymbols) } catch (_: Exception) { null } ?: emptyList()
+
+            val combinedMap = LinkedHashMap<String, ThematicStockItem>()
+            for (g in liveGainers) {
+                combinedMap[g.symbol] = g
+            }
+            for (q in fallbackQuotes) {
+                if (!combinedMap.containsKey(q.symbol)) {
+                    val (indName, indBk) = StockIndustryRegistry.resolveStockIndustryLocally(q.symbol)
+                    val isSuspended = (q.price <= 0.0) && (q.previousClose > 0.0)
+                    val tag = when {
+                        isSuspended -> "停牌"
+                        q.changePercent >= 19.8 -> "20cm涨停"
+                        q.changePercent >= 9.8 -> "涨停领跑"
+                        q.changePercent >= 5.0 -> "多头主升"
+                        q.changePercent >= 0.0 -> "红盘趋势"
+                        else -> "高位蓄势"
+                    }
+                    combinedMap[q.symbol] = ThematicStockItem(
+                        symbol = q.symbol,
+                        name = q.name,
+                        price = q.price,
+                        change = q.change,
+                        changePercent = q.changePercent,
+                        boardCount = if (q.changePercent >= 9.8) 1 else null,
+                        tag = tag,
+                        subDetail = if (indName.isNotEmpty()) "$indName·梯队龙头" else "连板梯队",
+                        industry = indName,
+                        industryBkCode = indBk,
+                        industryChangePercent = null,
+                        turnoverAmount = q.turnoverAmount,
+                        turnoverRate = q.turnoverRate
+                    )
+                }
+            }
+
+            val sortedItems = combinedMap.values.sortedByDescending { it.changePercent }
+            val avgChg = if (sortedItems.isNotEmpty()) round(sortedItems.map { it.changePercent }.average() * 100) / 100.0 else 0.0
+            val sumTurnover = sortedItems.sumOf { it.turnoverAmount }
+            val avgTurnoverRate = if (sortedItems.isNotEmpty()) {
+                val nonZero = sortedItems.filter { it.turnoverRate > 0.0 }
+                if (nonZero.isNotEmpty()) round(nonZero.map { it.turnoverRate }.average() * 100) / 100.0 else 0.0
+            } else 0.0
+            val leader = sortedItems.firstOrNull()
+
+            val quote = StockQuote(
+                symbol = "BK1638",
+                name = "最近多板",
+                price = round(1000.0 * (1.0 + avgChg / 100.0) * 100) / 100.0,
+                change = round(1000.0 * (avgChg / 100.0) * 100) / 100.0,
+                changePercent = avgChg,
+                currency = "点",
+                exchange = "板块",
+                open = 1000.0,
+                high = round(1000.0 * (1.0 + (leader?.changePercent ?: avgChg) / 100.0) * 100) / 100.0,
+                low = 1000.0,
+                previousClose = 1000.0,
+                volume = (sumTurnover / 20.0).toLong(),
+                turnoverAmount = sumTurnover,
+                turnoverRate = avgTurnoverRate,
+                leadingStockName = leader?.name,
+                leadingStockChangePercent = leader?.changePercent,
+                riseCount = sortedItems.count { it.changePercent > 0.0 },
+                fallCount = sortedItems.count { it.changePercent < 0.0 },
+                flatCount = sortedItems.count { it.changePercent == 0.0 },
+                isIndex = false
+            )
+
+            val result = SectorDetailResult(
+                quote = quote,
+                constituents = sortedItems,
+                totalCount = sortedItems.size,
+                diagnosticInfo = "新浪VIP实时行情直连 (${sortedItems.size}只)"
+            )
+            cacheSectorDetail("BK1638", result)
+            return@withContext Result.success(result)
         }
 
         val rawQuote = try {
@@ -696,13 +814,15 @@ class StockRepository(
             }
         } catch (e: Exception) {}
 
-        // 3. Third Engine: Configured Cloudflare Worker API
-        try {
-            val results = getService().searchStocks(cleanQ)
-            if (results.isNotEmpty()) {
-                return@withContext Result.success(results)
-            }
-        } catch (e: Exception) {}
+        // 3. Third Engine: Configured Custom Server API (if explicitly configured and not workers.dev)
+        if (isUsableCustomServer()) {
+            try {
+                val results = getService().searchStocks(cleanQ)
+                if (results.isNotEmpty()) {
+                    return@withContext Result.success(results)
+                }
+            } catch (e: Exception) {}
+        }
 
         // 4. Local Dictionary and Regex Matching
         val filtered = FALLBACK_SEARCH.filter {
@@ -755,14 +875,16 @@ class StockRepository(
             // continue to secondary
         }
 
-        // 2. Secondary Engine: Configured Cloudflare Worker API
-        try {
-            val indices = getService().getMarketIndices()
-            if (indices.isNotEmpty()) {
-                return@withContext Result.success(indices)
+        // 2. Secondary Engine: Configured Custom Server API (if explicitly configured and not workers.dev)
+        if (isUsableCustomServer()) {
+            try {
+                val indices = getService().getMarketIndices()
+                if (indices.isNotEmpty()) {
+                    return@withContext Result.success(indices)
+                }
+            } catch (e: Exception) {
+                // fallback
             }
-        } catch (e: Exception) {
-            // fallback
         }
 
         Result.success(FALLBACK_INDICES)
@@ -921,6 +1043,14 @@ class StockRepository(
         )
         for (type in bkSectors) {
             try {
+                if (type == ThematicSectorType.MULTI_BOARD) {
+                    val gainers = fetchDirectSinaMarketCenterGainers(page = 1, pageSize = 35)
+                    if (gainers.isNotEmpty()) {
+                        resultMap[type]?.addAll(gainers)
+                        anyLoaded = true
+                        continue
+                    }
+                }
                 val items = fetchEastMoneySectorConstituents(type.bkCode, limit = 35)
                 if (items.isNotEmpty()) {
                     resultMap[type]?.addAll(items)
@@ -1173,10 +1303,85 @@ class StockRepository(
         val diagnosticInfo: String? = null
     )
 
+    fun fetchDirectSinaMarketCenterGainers(page: Int = 1, pageSize: Int = 80): List<ThematicStockItem> {
+        val url = "http://vip.stock.finance.sina.com.cn/quotes_service/api/json_v2.php/Market_Center.getHQNodeData?page=$page&num=$pageSize&sort=changepercent&asc=0&node=hs_a&symbol=&_s_r_a=page"
+        try {
+            val request = Request.Builder()
+                .url(url)
+                .header("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64)")
+                .header("Referer", "http://vip.stock.finance.sina.com.cn/")
+                .build()
+
+            val response = ApiClient.ultraFastOkHttpClient.newCall(request).execute()
+            if (!response.isSuccessful) {
+                response.close()
+                return emptyList()
+            }
+            val bytes = response.body?.bytes() ?: return emptyList()
+            val bodyStr = String(bytes, Charset.forName("GBK")).trim()
+            if (bodyStr.isEmpty() || !bodyStr.startsWith("[")) return emptyList()
+
+            val jsonArr = JSONArray(bodyStr)
+            val items = mutableListOf<ThematicStockItem>()
+            for (i in 0 until jsonArr.length()) {
+                val obj = jsonArr.optJSONObject(i) ?: continue
+                val rawSym = obj.optString("symbol", "").trim().lowercase()
+                val code = obj.optString("code", "").trim()
+                val name = obj.optString("name", "").trim()
+                if (code.isEmpty() || name.isEmpty()) continue
+
+                val trade = obj.optDouble("trade", 0.0)
+                val priceChange = obj.optDouble("pricechange", 0.0)
+                val changePercent = obj.optDouble("changepercent", 0.0)
+                val amount = obj.optDouble("amount", 0.0)
+                val turnoverRatio = obj.optDouble("turnoverratio", 0.0)
+
+                val standardSymbol = when {
+                    rawSym.startsWith("sh") || code.startsWith("6") -> "$code.SS"
+                    rawSym.startsWith("bj") || code.startsWith("8") || code.startsWith("4") || code.startsWith("920") -> "$code.BJ"
+                    else -> "$code.SZ"
+                }
+
+                val (indName, indBk) = StockIndustryRegistry.resolveStockIndustryLocally(standardSymbol)
+                val isSuspended = trade <= 0.0
+                val tag = when {
+                    isSuspended -> "停牌"
+                    changePercent >= 19.8 -> "20cm涨停"
+                    changePercent >= 9.8 -> "涨停领跑"
+                    changePercent >= 5.0 -> "多头主升"
+                    changePercent >= 0.0 -> "红盘趋势"
+                    else -> "高位蓄势"
+                }
+
+                items.add(
+                    ThematicStockItem(
+                        symbol = standardSymbol,
+                        name = name,
+                        price = trade,
+                        change = priceChange,
+                        changePercent = changePercent,
+                        boardCount = if (changePercent >= 9.8) 1 else null,
+                        tag = tag,
+                        subDetail = if (indName.isNotEmpty()) "$indName·梯队龙头" else "涨停精选",
+                        industry = indName,
+                        industryBkCode = indBk,
+                        industryChangePercent = null,
+                        turnoverAmount = amount,
+                        turnoverRate = turnoverRatio
+                    )
+                )
+            }
+            return items
+        } catch (e: Exception) {
+            android.util.Log.w("SinaGainers", "fetchDirectSinaMarketCenterGainers failed: ${e.message}")
+            return emptyList()
+        }
+    }
+
     private fun fetchEastMoneySectorConstituentsPage(
         bkCode: String,
         page: Int = 1,
-        pageSize: Int = 100
+        pageSize: Int = 200
     ): SectorConstituentsPageResult {
         val rawClean = bkCode.trim().uppercase()
         val resolvedCode = when {
@@ -1191,10 +1396,16 @@ class StockRepository(
         val isIndustrySector = StockIndustryRegistry.isIndustrySector(clean)
         val defaultIndName = StockIndustryRegistry.getSectorName(clean)
 
+        // Native fast path for BK1638 (连板天梯 / 涨停股): Sina VIP Market Center live gainers
+        if (clean == "BK1638" || clean == "1638") {
+            val sinaGainers = fetchDirectSinaMarketCenterGainers(page = page, pageSize = pageSize)
+            if (sinaGainers.isNotEmpty()) {
+                return SectorConstituentsPageResult(sinaGainers, maxOf(80, sinaGainers.size), null)
+            }
+        }
+
         val candidateUrls = listOf(
-            // 1. Primary High-Performance Engine: Configured Cloudflare Worker (online, tested, with Sina & Tencent live aggregation)
-            "${preferences.getServerUrl().trimEnd('/')}/api/sector/constituents?bk=$clean&pn=$page&pz=$pageSize",
-            // 2. Direct East Money primary push2 node (with ultra-fast 1.5s timeout)
+            "https://push2.eastmoney.com/api/qt/clist/get?pn=$page&pz=$pageSize&po=1&np=1&ut=bd1d9ddb04089700cf9c27f6f7426281&fltt=2&invt=2&fid=f3&fs=b:$clean+f:!50&fields=f12,f14,f2,f3,f4,f5,f6,f7,f15,f16,f17,f18,f100",
             "https://29.push2.eastmoney.com/api/qt/clist/get?pn=$page&pz=$pageSize&po=1&np=1&ut=bd1d9ddb04089700cf9c27f6f7426281&fltt=2&invt=2&fid=f3&fs=b:$clean+f:!50&fields=f12,f14,f2,f3,f4,f5,f6,f7,f15,f16,f17,f18,f100"
         )
 
@@ -1390,12 +1601,17 @@ class StockRepository(
 
     private fun fetchEastMoneySectorConstituentsFull(bkCode: String, maxItems: Int = 2000): SectorConstituentsFullResult {
         val clean = bkCode.trim().uppercase()
+        if (clean == "BK1638" || clean == "1638") {
+            val page1 = fetchEastMoneySectorConstituentsPage(clean, page = 1, pageSize = 80)
+            return SectorConstituentsFullResult(page1.items, page1.total, page1.diagnosticInfo)
+        }
+
         val allItems = mutableListOf<ThematicStockItem>()
         val seenSymbols = HashSet<String>()
         var reportedTotal = 0
 
-        // Page 1 — canonical Eastmoney pageSize = 100
-        val page1Result = fetchEastMoneySectorConstituentsPage(clean, page = 1, pageSize = 100)
+        // Page 1 with pageSize = 200 (covers 90%+ sectors in a single fast call!)
+        val page1Result = fetchEastMoneySectorConstituentsPage(clean, page = 1, pageSize = 200)
         val page1Items = page1Result.items
         val total = page1Result.total
         android.util.Log.d("SectorPagination", "[$clean] page1: ${page1Items.size} items, total=$total, diag=${page1Result.diagnosticInfo}")
@@ -1410,13 +1626,13 @@ class StockRepository(
             return SectorConstituentsFullResult(emptyList(), 0, page1Result.diagnosticInfo)
         }
 
-        // If total reported is greater than 100 or page 1 was full (100 items), fetch remaining pages
-        val targetCount = if (reportedTotal > 0) reportedTotal else if (page1Items.size == 100) maxItems else page1Items.size
-        if (targetCount > 100 && page1Items.isNotEmpty()) {
-            val totalPages = minOf((targetCount + 99) / 100, (maxItems + 99) / 100)
+        // If total reported is greater than 200 or page 1 was full (200 items), fetch remaining pages
+        val targetCount = if (reportedTotal > 0) reportedTotal else if (page1Items.size >= 200) maxItems else page1Items.size
+        if (targetCount > 200 && page1Items.isNotEmpty()) {
+            val totalPages = minOf((targetCount + 199) / 200, (maxItems + 199) / 200)
             android.util.Log.d("SectorPagination", "[$clean] needs $totalPages pages (target=$targetCount)")
             for (p in 2..totalPages) {
-                val pageResult = fetchEastMoneySectorConstituentsPage(clean, page = p, pageSize = 100)
+                val pageResult = fetchEastMoneySectorConstituentsPage(clean, page = p, pageSize = 200)
                 val pageItems = pageResult.items
                 android.util.Log.d("SectorPagination", "[$clean] page$p: ${pageItems.size} items")
                 if (pageItems.isEmpty()) break
@@ -1425,7 +1641,7 @@ class StockRepository(
                         allItems.add(item)
                     }
                 }
-                if (pageItems.size < 100) break
+                if (pageItems.size < 200) break
             }
         }
 
@@ -1572,41 +1788,50 @@ class StockRepository(
             .header("User-Agent", "Mozilla/5.0")
             .build()
 
-        val response = ApiClient.okHttpClient.newCall(request).execute()
-        if (!response.isSuccessful) return null
+        val response = ApiClient.ultraFastOkHttpClient.newCall(request).execute()
+        if (!response.isSuccessful) {
+            response.close()
+            return null
+        }
         val bytes = response.body?.bytes() ?: return null
         val text = String(bytes, Charset.forName("GBK"))
         val quote = parseTencentLine(text, clean) ?: return null
         return if (!quote.isIndex && !clean.startsWith("BK") && quote.industryBkCode != null) {
-            val secQuotes = try {
-                fetchDirectEastMoneySectorQuotes(listOf(quote.industryBkCode))
-            } catch (_: Exception) { null }
-            val indChg = secQuotes?.firstOrNull()?.changePercent ?: quote.changePercent
+            val cachedChg = sectorDetailCache[quote.industryBkCode]?.second?.quote?.changePercent
+            val indChg = cachedChg ?: quote.changePercent
             quote.copy(industryChangePercent = indChg)
         } else quote
     }
 
     private fun fetchDirectTencentQuotes(symbols: List<String>): List<StockQuote>? {
         if (symbols.isEmpty()) return emptyList()
-        val tCodes = symbols.map { symbolToTencentCode(it) }
-        val url = "https://qt.gtimg.cn/q=${tCodes.joinToString(",")}"
-        val request = Request.Builder()
-            .url(url)
-            .header("User-Agent", "Mozilla/5.0")
-            .build()
-
-        val response = ApiClient.okHttpClient.newCall(request).execute()
-        if (!response.isSuccessful) return null
-        val bytes = response.body?.bytes() ?: return null
-        val text = String(bytes, Charset.forName("GBK"))
-        val lines = text.split(";\n", ";").filter { it.trim().isNotEmpty() }
+        val chunks = symbols.chunked(60)
         val map = mutableMapOf<String, StockQuote>()
-        for (line in lines) {
-            val q = parseTencentLine(line)
-            if (q != null) {
-                map[q.symbol] = q
-                map[q.symbol.substringBefore(".")] = q
-            }
+        for (chunk in chunks) {
+            val tCodes = chunk.map { symbolToTencentCode(it) }
+            val url = "https://qt.gtimg.cn/q=${tCodes.joinToString(",")}"
+            val request = Request.Builder()
+                .url(url)
+                .header("User-Agent", "Mozilla/5.0")
+                .build()
+
+            try {
+                val response = ApiClient.ultraFastOkHttpClient.newCall(request).execute()
+                if (!response.isSuccessful) {
+                    response.close()
+                    continue
+                }
+                val bytes = response.body?.bytes() ?: continue
+                val text = String(bytes, Charset.forName("GBK"))
+                val lines = text.split(";\n", ";").filter { it.trim().isNotEmpty() }
+                for (line in lines) {
+                    val q = parseTencentLine(line)
+                    if (q != null) {
+                        map[q.symbol] = q
+                        map[q.symbol.substringBefore(".")] = q
+                    }
+                }
+            } catch (_: Exception) {}
         }
         val list = mutableListOf<StockQuote>()
         for (sym in symbols) {
