@@ -22,10 +22,50 @@ class StockRepository(
     val preferences: WatchlistPreferences
 ) {
     private val intradayBarsCache = java.util.concurrent.ConcurrentHashMap<String, Pair<Long, Map<String, List<CandlePoint>>>>()
+    private val stockQuoteCache = java.util.concurrent.ConcurrentHashMap<String, Pair<Long, StockQuote>>()
+    private val sectorDetailCache = java.util.concurrent.ConcurrentHashMap<String, Pair<Long, SectorDetailResult>>()
 
     private fun getService() = ApiClient.getService(preferences.getServerUrl())
 
-    private val sectorDetailCache = java.util.concurrent.ConcurrentHashMap<String, Pair<Long, SectorDetailResult>>()
+    fun getCachedStockQuote(symbol: String): StockQuote? {
+        val clean = symbol.trim().uppercase()
+        val cached = stockQuoteCache[clean] ?: return null
+        return cached.second
+    }
+
+    fun cacheStockQuote(quote: StockQuote) {
+        val clean = quote.symbol.trim().uppercase()
+        stockQuoteCache[clean] = Pair(System.currentTimeMillis(), quote)
+    }
+
+    fun cacheStockFromConstituent(item: ThematicStockItem) {
+        val clean = item.symbol.trim().uppercase()
+        val p = if (item.price > 0.0) item.price else 10.0
+        val cp = item.changePercent
+        val prevClose = if (cp != 0.0) round(p / (1.0 + cp / 100.0) * 100.0) / 100.0 else p
+        val q = StockQuote(
+            symbol = clean,
+            name = item.name,
+            price = p,
+            change = item.change,
+            changePercent = cp,
+            currency = "CNY",
+            exchange = if (clean.startsWith("60") || clean.startsWith("68") || clean.startsWith("90")) "沪A"
+                       else if (clean.startsWith("8") || clean.startsWith("4") || clean.startsWith("92")) "京A"
+                       else "深A",
+            open = p,
+            high = maxOf(p, prevClose),
+            low = minOf(p, prevClose),
+            previousClose = prevClose,
+            volume = if (item.turnoverAmount != null && item.turnoverAmount > 0.0) item.turnoverAmount / maxOf(p, 1.0) else 1000000.0,
+            turnoverAmount = item.turnoverAmount,
+            turnoverRate = item.turnoverRate,
+            industry = item.industry,
+            industryBkCode = item.industryBkCode,
+            industryChangePercent = item.industryChangePercent
+        )
+        cacheStockQuote(q)
+    }
 
     fun getCachedSectorDetail(bkCode: String): SectorDetailResult? {
         val clean = bkCode.trim().uppercase()
@@ -62,12 +102,30 @@ class StockRepository(
                 round(entry.value.map { it.changePercent }.average() * 100) / 100
             }
 
-        val sectorQuotes = try {
-            fetchDirectEastMoneySectorQuotes(bkCodes) ?: emptyList()
-        } catch (_: Exception) {
-            emptyList()
+        // Check in-memory sector cache first (0ms)
+        val sectorMap = mutableMapOf<String, Double>()
+        val missingBkCodes = mutableListOf<String>()
+        for (bk in bkCodes) {
+            val upper = bk.uppercase()
+            val cachedChange = sectorDetailCache[upper]?.second?.quote?.changePercent
+            if (cachedChange != null) {
+                sectorMap[upper] = cachedChange
+            } else {
+                missingBkCodes.add(upper)
+            }
         }
-        val sectorMap = sectorQuotes.associate { it.symbol.uppercase() to it.changePercent }
+
+        // If only 1 quote (e.g. stock detail page opened), avoid blocking network call!
+        if (missingBkCodes.isNotEmpty() && quotes.size > 1) {
+            val sectorQuotes = try {
+                fetchDirectEastMoneySectorQuotes(missingBkCodes) ?: emptyList()
+            } catch (_: Exception) {
+                emptyList()
+            }
+            for (sq in sectorQuotes) {
+                sectorMap[sq.symbol.uppercase()] = sq.changePercent
+            }
+        }
 
         return assigned.map { q ->
             if (q.industryBkCode != null) {
@@ -122,17 +180,23 @@ class StockRepository(
 
     fun fetchDirectEastMoneySectorQuotes(sectorCodes: List<String>): List<StockQuote>? {
         if (sectorCodes.isEmpty()) return emptyList()
+        val firstBk = sectorCodes.firstOrNull()?.trim()?.uppercase() ?: ""
+
+        // 1. Instant check for cached sector detail quote
+        val cached = sectorDetailCache[firstBk]?.second?.quote
+        if (cached != null && System.currentTimeMillis() - (sectorDetailCache[firstBk]?.first ?: 0L) < 30_000) {
+            return listOf(cached)
+        }
+
         val secids = sectorCodes.joinToString(",") {
             val clean = it.trim().uppercase()
             if (clean.startsWith("BK")) "90.$clean" else "90.BK$clean"
         }
         val urls = listOf(
-            "https://29.push2.eastmoney.com/api/qt/ulist.np/get?secids=$secids&fields=f12,f14,f2,f3,f4,f5,f6,f7,f15,f16,f17,f18&fltt=2&invt=2",
-            "https://79.push2.eastmoney.com/api/qt/ulist.np/get?secids=$secids&fields=f12,f14,f2,f3,f4,f5,f6,f7,f15,f16,f17,f18&fltt=2&invt=2",
-            "https://pushguest.eastmoney.com/api/qt/ulist.np/get?secids=$secids&fields=f12,f14,f2,f3,f4,f5,f6,f7,f15,f16,f17,f18&fltt=2&invt=2",
-            "http://29.push2.eastmoney.com/api/qt/ulist.np/get?secids=$secids&fields=f12,f14,f2,f3,f4,f5,f6,f7,f15,f16,f17,f18&fltt=2&invt=2",
-            "https://push2.eastmoney.com/api/qt/ulist.np/get?secids=$secids&fields=f12,f14,f2,f3,f4,f5,f6,f7,f15,f16,f17,f18&fltt=2&invt=2",
-            "${preferences.getServerUrl().trimEnd('/')}/api/sector/quote?bk=${sectorCodes.firstOrNull()?.trim()?.uppercase() ?: ""}"
+            // 1. Configured Backend / Cloudflare Worker (Fast, online, synthesized fallback)
+            "${preferences.getServerUrl().trimEnd('/')}/api/sector/quote?bk=$firstBk",
+            // 2. Direct East Money primary push2 node (Ultra-fast timeout)
+            "https://29.push2.eastmoney.com/api/qt/ulist.np/get?secids=$secids&fields=f12,f14,f2,f3,f4,f5,f6,f7,f15,f16,f17,f18&fltt=2&invt=2"
         )
         for (url in urls) {
             try {
@@ -142,7 +206,7 @@ class StockRepository(
                     .header("Referer", "https://quote.eastmoney.com/")
                     .build()
 
-                val response = ApiClient.fastOkHttpClient.newCall(request).execute()
+                val response = ApiClient.ultraFastOkHttpClient.newCall(request).execute()
                 if (!response.isSuccessful) {
                     response.close()
                     continue
@@ -281,7 +345,11 @@ class StockRepository(
             }
         }
 
-        Result.success(enrichQuotesWithIndustry(combined))
+        val enriched = enrichQuotesWithIndustry(combined)
+        for (q in enriched) {
+            if (q.price > 0.0) cacheStockQuote(q)
+        }
+        Result.success(enriched)
     }
 
     suspend fun getStockQuote(symbol: String): Result<StockQuote> = withContext(Dispatchers.IO) {
@@ -313,11 +381,19 @@ class StockRepository(
             )
         }
 
-        // 1. Primary Engine: Direct Tencent Finance live feed
+        // 0. Instant Cache Check (Ultra-Fast 0ms response when opening stock from Sector / Watchlist)
+        getCachedStockQuote(clean)?.let { cached ->
+            if (cached.price > 0.0 && (System.currentTimeMillis() - (stockQuoteCache[clean]?.first ?: 0L)) < 15_000) {
+                return@withContext Result.success(cached)
+            }
+        }
+
+        // 1. Primary Engine: Direct Tencent Finance live feed (fast ~100ms)
         try {
             fetchDirectTencentQuote(symbol)?.let { quote ->
                 if (quote.price > 0.0) {
                     val enriched = enrichQuotesWithIndustry(listOf(quote)).firstOrNull() ?: quote
+                    cacheStockQuote(enriched)
                     return@withContext Result.success(enriched)
                 }
             }
@@ -330,6 +406,7 @@ class StockRepository(
             val quote = getService().getQuote(symbol)
             if (quote.price > 0.0) {
                 val enriched = enrichQuotesWithIndustry(listOf(quote)).firstOrNull() ?: quote
+                cacheStockQuote(enriched)
                 return@withContext Result.success(enriched)
             }
         } catch (e: Exception) {
@@ -337,26 +414,47 @@ class StockRepository(
         }
 
         // 3. High-Fidelity Fallback
-        val fallback = createFallbackQuote(symbol)
+        val fallback = getCachedStockQuote(clean) ?: createFallbackQuote(symbol)
         val enriched = enrichQuotesWithIndustry(listOf(fallback)).firstOrNull() ?: fallback
+        cacheStockQuote(enriched)
         Result.success(enriched)
     }
 
     suspend fun getHistoricalData(symbol: String, range: String, date: String? = null): Result<HistoricalData> = withContext(Dispatchers.IO) {
-        // 1. Primary Engine for Today's Intraday: East Money Trends2 with 09:15-09:25 Call Auction (集合竞价分时)
-        if (range == "1d" && date == null) {
-            try {
-                fetchDirectEastMoneyTrends(symbol)?.let { data ->
-                    if (data.candles.isNotEmpty()) {
-                        return@withContext Result.success(data)
+        val clean = symbol.trim().uppercase()
+
+        // 1. Check in-memory intraday cache (Instant 0ms)
+        if (range == "1d") {
+            intradayBarsCache[clean]?.let { cached ->
+                if (System.currentTimeMillis() - cached.first < 30_000L) {
+                    val map = cached.second
+                    val availDates = map.keys.toList()
+                    val targetDate = date ?: availDates.lastOrNull()
+                    val candles = map[targetDate]
+                    if (!candles.isNullOrEmpty()) {
+                        val pc = candles.firstOrNull()?.open ?: 0.0
+                        return@withContext Result.success(
+                            HistoricalData(
+                                symbol = clean,
+                                range = "1d",
+                                interval = "5m",
+                                candles = candles,
+                                meta = HistoricalMeta(
+                                    currency = "CNY",
+                                    previousClose = pc,
+                                    high = candles.maxOfOrNull { it.high } ?: pc,
+                                    low = candles.minOfOrNull { it.low } ?: pc,
+                                    selectedDate = targetDate,
+                                    availableDates = availDates
+                                )
+                            )
+                        )
                     }
                 }
-            } catch (e: Exception) {
-                // continue to Sina fallback
             }
         }
 
-        // 2. Direct Sina Finance KLine & Historical Intraday API
+        // 2. Direct Sina Finance KLine & Historical Intraday API (Fast ~0.5s & Highly Reliable)
         try {
             fetchDirectSinaHistory(symbol, range, date)?.let { data ->
                 if (data.candles.isNotEmpty()) {
@@ -364,20 +462,29 @@ class StockRepository(
                 }
             }
         } catch (e: Exception) {
-            // continue to secondary
+            // continue to EastMoney / Worker
         }
 
-        // 3. Secondary Engine: Configured Cloudflare Worker API
+        // 3. Fast East Money Trends2 (for 09:15-09:25 Call Auction if Sina was unavailable)
+        if (range == "1d" && date == null) {
+            try {
+                fetchDirectEastMoneyTrends(symbol)?.let { data ->
+                    if (data.candles.isNotEmpty()) {
+                        return@withContext Result.success(data)
+                    }
+                }
+            } catch (e: Exception) {}
+        }
+
+        // 4. Secondary Engine: Configured Cloudflare Worker API
         try {
             val data = getService().getHistory(symbol = symbol, range = range, date = date)
             if (data.candles.isNotEmpty()) {
                 return@withContext Result.success(data)
             }
-        } catch (e: Exception) {
-            // continue to fallback
-        }
+        } catch (e: Exception) {}
 
-        // 4. Fallback
+        // 5. Fallback
         Result.success(createFallbackHistory(symbol, range))
     }
 
@@ -500,6 +607,9 @@ class StockRepository(
         val result = SectorDetailResult(quote, enrichedConstituents, finalTotal, fullResult.diagnosticInfo)
         if (enrichedConstituents.isNotEmpty()) {
             sectorDetailCache[clean] = Pair(System.currentTimeMillis(), result)
+            for (item in enrichedConstituents) {
+                cacheStockFromConstituent(item)
+            }
         }
         Result.success(result)
     }
@@ -985,75 +1095,69 @@ class StockRepository(
     private fun fetchDirectEastMoneyTrends(symbol: String): HistoricalData? {
         val clean = symbol.trim().uppercase()
         val secId = symbolToEastMoneySecId(clean)
-        val urls = listOf(
-            "https://29.push2.eastmoney.com/api/qt/stock/trends2/get?secid=$secId&fields1=f1,f2,f3,f4,f5,f6,f7,f8,f9,f10,f11,f12,f13&fields2=f51,f52,f53,f54,f55,f56,f57,f58",
-            "https://79.push2.eastmoney.com/api/qt/stock/trends2/get?secid=$secId&fields1=f1,f2,f3,f4,f5,f6,f7,f8,f9,f10,f11,f12,f13&fields2=f51,f52,f53,f54,f55,f56,f57,f58",
-            "https://push2.eastmoney.com/api/qt/stock/trends2/get?secid=$secId&fields1=f1,f2,f3,f4,f5,f6,f7,f8,f9,f10,f11,f12,f13&fields2=f51,f52,f53,f54,f55,f56,f57,f58"
-        )
-        for (url in urls) {
-            try {
-                val request = Request.Builder()
-                    .url(url)
-                    .header("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64)")
-                    .header("Referer", "https://quote.eastmoney.com/")
-                    .build()
+        val url = "https://29.push2.eastmoney.com/api/qt/stock/trends2/get?secid=$secId&fields1=f1,f2,f3,f4,f5,f6,f7,f8,f9,f10,f11,f12,f13&fields2=f51,f52,f53,f54,f55,f56,f57,f58"
+        try {
+            val request = Request.Builder()
+                .url(url)
+                .header("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64)")
+                .header("Referer", "https://quote.eastmoney.com/")
+                .build()
 
-                val response = ApiClient.fastOkHttpClient.newCall(request).execute()
-                if (!response.isSuccessful) {
-                    response.close()
-                    continue
-                }
-                val bodyStr = response.body?.string() ?: continue
-                val rootObj = try { JSONObject(bodyStr) } catch (_: Exception) { continue }
-                val dataObj = rootObj.optJSONObject("data") ?: continue
-                val trendsArr = dataObj.optJSONArray("trends") ?: continue
-                if (trendsArr.length() == 0) continue
-
-        val preClose = dataObj.optDouble("preClose", 0.0)
-        val sdfMinute = SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.getDefault()).apply {
-            timeZone = TimeZone.getTimeZone("GMT+8")
-        }
-
-        val candles = ArrayList<CandlePoint>(trendsArr.length())
-        for (i in 0 until trendsArr.length()) {
-            val line = trendsArr.optString(i, "")
-            if (line.isEmpty()) continue
-            val parts = line.split(",")
-            if (parts.size >= 6) {
-                val dtStr = parts[0]
-                val ts = try {
-                    sdfMinute.parse(dtStr)?.time ?: System.currentTimeMillis()
-                } catch (_: Exception) {
-                    System.currentTimeMillis()
-                }
-                val open = parts[1].toDoubleOrNull() ?: 0.0
-                val close = parts[2].toDoubleOrNull() ?: open
-                val high = parts[3].toDoubleOrNull() ?: max(open, close)
-                val low = parts[4].toDoubleOrNull() ?: min(open, close)
-                val vol = parts[5].toLongOrNull() ?: 0L
-                candles.add(
-                    CandlePoint(
-                        timestamp = ts,
-                        open = open,
-                        high = high,
-                        low = low,
-                        close = close,
-                        volume = vol
-                    )
-                )
+            val response = ApiClient.ultraFastOkHttpClient.newCall(request).execute()
+            if (!response.isSuccessful) {
+                response.close()
+                return null
             }
-        }
+            val bodyStr = response.body?.string() ?: return null
+            val rootObj = try { JSONObject(bodyStr) } catch (_: Exception) { return null }
+            val dataObj = rootObj.optJSONObject("data") ?: return null
+            val trendsArr = dataObj.optJSONArray("trends") ?: return null
+            if (trendsArr.length() == 0) return null
 
-                return HistoricalData(
-                    symbol = symbol,
-                    range = "1d",
-                    candles = candles,
-                    meta = HistoryMeta(
-                        previousClose = if (preClose > 0) preClose else null
+            val preClose = dataObj.optDouble("preClose", 0.0)
+            val sdfMinute = SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.getDefault()).apply {
+                timeZone = TimeZone.getTimeZone("GMT+8")
+            }
+
+            val candles = ArrayList<CandlePoint>(trendsArr.length())
+            for (i in 0 until trendsArr.length()) {
+                val line = trendsArr.optString(i, "")
+                if (line.isEmpty()) continue
+                val parts = line.split(",")
+                if (parts.size >= 6) {
+                    val dtStr = parts[0]
+                    val ts = try {
+                        sdfMinute.parse(dtStr)?.time ?: System.currentTimeMillis()
+                    } catch (_: Exception) {
+                        System.currentTimeMillis()
+                    }
+                    val open = parts[1].toDoubleOrNull() ?: 0.0
+                    val close = parts[2].toDoubleOrNull() ?: open
+                    val high = parts[3].toDoubleOrNull() ?: max(open, close)
+                    val low = parts[4].toDoubleOrNull() ?: min(open, close)
+                    val vol = parts[5].toLongOrNull() ?: 0L
+                    candles.add(
+                        CandlePoint(
+                            timestamp = ts,
+                            open = open,
+                            high = high,
+                            low = low,
+                            close = close,
+                            volume = vol
+                        )
                     )
+                }
+            }
+
+            return HistoricalData(
+                symbol = symbol,
+                range = "1d",
+                candles = candles,
+                meta = HistoryMeta(
+                    previousClose = if (preClose > 0) preClose else null
                 )
-            } catch (_: Exception) {}
-        }
+            )
+        } catch (_: Exception) {}
         return null
     }
 
@@ -1088,20 +1192,10 @@ class StockRepository(
         val defaultIndName = StockIndustryRegistry.getSectorName(clean)
 
         val candidateUrls = listOf(
-            // 1. Primary EastMoney / AKShare canonical endpoint with b:BK+f:!50
-            "https://29.push2.eastmoney.com/api/qt/clist/get?pn=$page&pz=$pageSize&po=1&np=1&ut=bd1d9ddb04089700cf9c27f6f7426281&fltt=2&invt=2&fid=f3&fs=b:$clean+f:!50&fields=f12,f14,f2,f3,f4,f5,f6,f7,f15,f16,f17,f18,f100",
-            // 2. Secondary: 29 node without f:!50
-            "https://29.push2.eastmoney.com/api/qt/clist/get?pn=$page&pz=$pageSize&po=1&np=1&ut=bd1d9ddb04089700cf9c27f6f7426281&fltt=2&invt=2&fid=f3&fs=b:$clean&fields=f12,f14,f2,f3,f4,f5,f6,f7,f15,f16,f17,f18,f100",
-            // 3. Numbered node 79 (commonly used alternate in AKShare)
-            "https://79.push2.eastmoney.com/api/qt/clist/get?pn=$page&pz=$pageSize&po=1&np=1&ut=bd1d9ddb04089700cf9c27f6f7426281&fltt=2&invt=2&fid=f3&fs=b:$clean+f:!50&fields=f12,f14,f2,f3,f4,f5,f6,f7,f15,f16,f17,f18,f100",
-            // 4. Quote center guest gateway
-            "https://pushguest.eastmoney.com/api/qt/clist/get?pn=$page&pz=$pageSize&po=1&np=1&ut=fa5fd1943c7b386f172d6893dbfba10b&fltt=2&invt=2&fid=f3&fs=b:$clean+f:!50&fields=f12,f14,f2,f3,f4,f5,f6,f7,f15,f16,f17,f18,f100",
-            // 5. Plain HTTP fallback
-            "http://29.push2.eastmoney.com/api/qt/clist/get?pn=$page&pz=$pageSize&po=1&np=1&ut=bd1d9ddb04089700cf9c27f6f7426281&fltt=2&invt=2&fid=f3&fs=b:$clean+f:!50&fields=f12,f14,f2,f3,f4,f5,f6,f7,f15,f16,f17,f18,f100",
-            // 6. Numbered node 17
-            "https://17.push2.eastmoney.com/api/qt/clist/get?pn=$page&pz=$pageSize&po=1&np=1&ut=bd1d9ddb04089700cf9c27f6f7426281&fltt=2&invt=2&fid=f3&fs=b:$clean+f:!50&fields=f12,f14,f2,f3,f4,f5,f6,f7,f15,f16,f17,f18,f100",
-            // 7. Configured Backend / Cloudflare Worker fallback
-            "${preferences.getServerUrl().trimEnd('/')}/api/sector/constituents?bk=$clean&pn=$page&pz=$pageSize"
+            // 1. Primary High-Performance Engine: Configured Cloudflare Worker (online, tested, with Sina & Tencent live aggregation)
+            "${preferences.getServerUrl().trimEnd('/')}/api/sector/constituents?bk=$clean&pn=$page&pz=$pageSize",
+            // 2. Direct East Money primary push2 node (with ultra-fast 1.5s timeout)
+            "https://29.push2.eastmoney.com/api/qt/clist/get?pn=$page&pz=$pageSize&po=1&np=1&ut=bd1d9ddb04089700cf9c27f6f7426281&fltt=2&invt=2&fid=f3&fs=b:$clean+f:!50&fields=f12,f14,f2,f3,f4,f5,f6,f7,f15,f16,f17,f18,f100"
         )
 
         val diagnosticAttempts = mutableListOf<String>()
@@ -1115,7 +1209,7 @@ class StockRepository(
                     .header("Accept", "*/*")
                     .build()
 
-                val response = ApiClient.fastOkHttpClient.newCall(request).execute()
+                val response = ApiClient.ultraFastOkHttpClient.newCall(request).execute()
                 if (!response.isSuccessful) {
                     val code = response.code
                     response.close()

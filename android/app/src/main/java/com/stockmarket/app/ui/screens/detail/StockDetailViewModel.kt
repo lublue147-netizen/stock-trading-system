@@ -37,27 +37,35 @@ class StockDetailViewModel(
     private val repository: StockRepository
 ) : ViewModel() {
 
-    private val _uiState = MutableStateFlow(
-        StockDetailUiState(
-            symbol = symbol,
-            isWatchlisted = repository.isWatchlisted(symbol)
-        )
-    )
-    val uiState: StateFlow<StockDetailUiState> = _uiState.asStateFlow()
+    private val _uiState: MutableStateFlow<StockDetailUiState>
+    val uiState: StateFlow<StockDetailUiState>
 
     init {
+        val cached = repository.getCachedStockQuote(symbol)
+        _uiState = MutableStateFlow(
+            StockDetailUiState(
+                symbol = symbol,
+                quote = cached,
+                isLoadingQuote = cached == null,
+                isWatchlisted = repository.isWatchlisted(symbol)
+            )
+        )
+        uiState = _uiState.asStateFlow()
+
         loadQuote()
         loadHistory(_uiState.value.selectedRange)
     }
 
     fun loadQuote() {
         viewModelScope.launch {
-            _uiState.update { it.copy(isLoadingQuote = true) }
+            if (_uiState.value.quote == null) {
+                _uiState.update { it.copy(isLoadingQuote = true) }
+            }
             val res = repository.getStockQuote(symbol)
             _uiState.update {
                 it.copy(
                     isLoadingQuote = false,
-                    quote = res.getOrNull(),
+                    quote = res.getOrNull() ?: it.quote,
                     isWatchlisted = repository.isWatchlisted(symbol)
                 )
             }
@@ -69,7 +77,7 @@ class StockDetailViewModel(
         viewModelScope.launch {
             _uiState.update {
                 it.copy(
-                    isLoadingChart = true,
+                    isLoadingChart = it.historicalData == null,
                     selectedRange = range,
                     chartType = suggestedType,
                     selectedIntradayDate = date
