@@ -1916,22 +1916,17 @@ class StockRepository(
             }
         }
 
-        val candidateAttempts = listOf(
-            Triple("push2.eastmoney.com", "b:$clean", "fa5fd1943c7b386f172d6893dbfba10b"),
-            Triple("push2.eastmoney.com", "b:$clean+f:!50", "fa5fd1943c7b386f172d6893dbfba10b"),
-            Triple("29.push2.eastmoney.com", "b:$clean", "bd1d9ddb04089700cf9c27f6f7426281"),
-            Triple("29.push2.eastmoney.com", "b:$clean+f:!50", "bd1d9ddb04089700cf9c27f6f7426281"),
-            Triple("82.push2.eastmoney.com", "b:$clean", "bd1d9ddb04089700cf9c27f6f7426281"),
-            Triple("79.push2.eastmoney.com", "b:$clean", "fa5fd1943c7b386f172d6893dbfba10b"),
-            Triple("1.push2.eastmoney.com", "b:$clean", "bd1d9ddb04089700cf9c27f6f7426281")
-        )
+        // Use up to 500 items per page to minimize pagination round-trips for large sectors
+        val effectivePageSize = if (page == 1 && pageSize <= 200) 500 else pageSize
 
-        val candidateUrls = candidateAttempts.flatMap { (host, fsVal, utVal) ->
-            listOf(
-                "https://$host/api/qt/clist/get?pn=$page&pz=$pageSize&po=1&np=1&ut=$utVal&fltt=2&invt=2&fid=f3&fs=$fsVal&dect=1&fields=f12,f14,f2,f3,f4,f5,f6,f7,f15,f16,f17,f18,f100",
-                "http://$host/api/qt/clist/get?pn=$page&pz=$pageSize&po=1&np=1&ut=$utVal&fltt=2&invt=2&fid=f3&fs=$fsVal&dect=1&fields=f12,f14,f2,f3,f4,f5,f6,f7,f15,f16,f17,f18,f100"
-            )
-        }
+        // Prioritized candidate list: main push2 host first (most reliable from CN),
+        // then one backup. HTTP before HTTPS to avoid SSL overhead on first try.
+        val candidateUrls = listOf(
+            "http://push2.eastmoney.com/api/qt/clist/get?pn=$page&pz=$effectivePageSize&po=1&np=1&ut=fa5fd1943c7b386f172d6893dbfba10b&fltt=2&invt=2&fid=f3&fs=b:$clean&dect=1&fields=f12,f14,f2,f3,f4,f5,f6,f7,f15,f16,f17,f18,f100",
+            "https://push2.eastmoney.com/api/qt/clist/get?pn=$page&pz=$effectivePageSize&po=1&np=1&ut=fa5fd1943c7b386f172d6893dbfba10b&fltt=2&invt=2&fid=f3&fs=b:$clean&dect=1&fields=f12,f14,f2,f3,f4,f5,f6,f7,f15,f16,f17,f18,f100",
+            "http://29.push2.eastmoney.com/api/qt/clist/get?pn=$page&pz=$effectivePageSize&po=1&np=1&ut=bd1d9ddb04089700cf9c27f6f7426281&fltt=2&invt=2&fid=f3&fs=b:$clean&dect=1&fields=f12,f14,f2,f3,f4,f5,f6,f7,f15,f16,f17,f18,f100",
+            "https://29.push2.eastmoney.com/api/qt/clist/get?pn=$page&pz=$effectivePageSize&po=1&np=1&ut=bd1d9ddb04089700cf9c27f6f7426281&fltt=2&invt=2&fid=f3&fs=b:$clean&dect=1&fields=f12,f14,f2,f3,f4,f5,f6,f7,f15,f16,f17,f18,f100"
+        )
 
         val diagnosticAttempts = mutableListOf<String>()
         for (url in candidateUrls) {
