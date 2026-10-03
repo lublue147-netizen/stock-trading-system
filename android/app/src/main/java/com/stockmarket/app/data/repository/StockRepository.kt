@@ -201,7 +201,7 @@ class StockRepository(
 
     fun fetchDirectEastMoneyYesterdayZTPool(page: Int = 1, pageSize: Int = 80): List<ThematicStockItem> {
         val pi = maxOf(0, page - 1)
-        for (offset in 0..2) {
+        for (offset in 0..10) {
             val dateStr = getEastMoneyPoolDateStr(offset)
             val url = "https://push2ex.eastmoney.com/getYesterdayZTPool?ut=7eea3edcaed734bea9cbfc24409ed989&dpt=wz.ztzt&Pageindex=$pi&pagesize=$pageSize&sort=zdp:desc&date=$dateStr"
             try {
@@ -309,7 +309,7 @@ class StockRepository(
 
     fun fetchDirectEastMoneyTopicZTPool(page: Int = 1, pageSize: Int = 80): List<ThematicStockItem> {
         val pi = maxOf(0, page - 1)
-        for (offset in 0..2) {
+        for (offset in 0..10) {
             val dateStr = getEastMoneyPoolDateStr(offset)
             val url = "https://push2ex.eastmoney.com/getTopicZTPool?ut=7eea3edcaed734bea9cbfc24409ed989&dpt=wz.ztzt&Pageindex=$pi&pagesize=$pageSize&sort=lbc:desc&date=$dateStr"
             try {
@@ -416,7 +416,7 @@ class StockRepository(
 
     fun fetchDirectEastMoneyTopicQSPool(page: Int = 1, pageSize: Int = 80): List<ThematicStockItem> {
         val pi = maxOf(0, page - 1)
-        for (offset in 0..2) {
+        for (offset in 0..10) {
             val dateStr = getEastMoneyPoolDateStr(offset)
             val url = "https://push2ex.eastmoney.com/getTopicQSPool?ut=7eea3edcaed734bea9cbfc24409ed989&dpt=wz.ztzt&Pageindex=$pi&pagesize=$pageSize&sort=zdp:desc&date=$dateStr"
             try {
@@ -1153,6 +1153,52 @@ class StockRepository(
             sectorDetailCache[clean] = Pair(System.currentTimeMillis(), result)
             for (item in sortedItems) {
                 cacheStockFromConstituent(item)
+            }
+            return@withContext Result.success(result)
+        }
+
+        // Special native client-side fast-path for BK1715 / 1715 (趋势股 / 强势股): Official EastMoney push2ex QS pool
+        if (clean in listOf("BK1715", "1715")) {
+            val poolItems = fetchDirectEastMoneyTopicQSPool(page = 1, pageSize = 200)
+            val combinedMap = LinkedHashMap<String, ThematicStockItem>()
+            if (poolItems.isNotEmpty()) {
+                for (item in poolItems) {
+                    combinedMap[item.symbol] = item
+                }
+            }
+            val sortedItems = combinedMap.values.sortedByDescending { it.changePercent }
+            val avgChg = if (sortedItems.isNotEmpty()) round(sortedItems.map { it.changePercent }.average() * 100) / 100.0 else 0.0
+            val sumTurnover = sortedItems.sumOf { it.turnoverAmount }
+            val avgTurnoverRate = if (sortedItems.isNotEmpty()) {
+                val nonZero = sortedItems.filter { it.turnoverRate > 0.0 }
+                if (nonZero.isNotEmpty()) round(nonZero.map { it.turnoverRate }.average() * 100) / 100.0 else 0.0
+            } else 0.0
+            val leader = sortedItems.firstOrNull()
+            val quote = StockQuote(
+                symbol = clean,
+                name = "趋势强势股",
+                price = round(1000.0 * (1.0 + avgChg / 100.0) * 100) / 100.0,
+                change = round(1000.0 * (avgChg / 100.0) * 100) / 100.0,
+                changePercent = avgChg,
+                currency = "点",
+                exchange = "板块",
+                open = 1000.0,
+                high = round(1000.0 * (1.0 + (leader?.changePercent ?: avgChg) / 100.0) * 100) / 100.0,
+                low = 1000.0,
+                previousClose = 1000.0,
+                volume = (sumTurnover / 20.0).toLong(),
+                turnoverAmount = sumTurnover,
+                turnoverRate = avgTurnoverRate
+            )
+            val result = SectorDetailResult(
+                quote = quote,
+                constituents = sortedItems,
+                totalCount = sortedItems.size,
+                diagnosticInfo = "东方财富官方趋势强势股池 (${sortedItems.size}只)"
+            )
+            if (sortedItems.isNotEmpty()) {
+                sectorDetailCache[clean] = Pair(System.currentTimeMillis(), result)
+                for (item in sortedItems) { cacheStockFromConstituent(item) }
             }
             return@withContext Result.success(result)
         }
